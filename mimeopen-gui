@@ -1,0 +1,263 @@
+#!/usr/bin/env perl
+
+use Data::Dumper;
+use File::MimeInfo::Applications;
+use File::MimeInfo::Magic qw/magic/;
+use File::Basename qw/basename/;
+use File::DesktopEntry;
+use Glib qw/TRUE FALSE/;
+use Gtk2 qw/-init/;
+use Gtk2::SimpleList;
+
+$SCRIPT = $0;
+$0 = "mimeopen-gui";
+$screen = Gtk2::Gdk::Screen->get_default;
+$win_w = 300;
+$win_h = 300;
+
+
+## MIME Apps
+$uri = $ARGV[0];
+if(not defined $uri)
+{
+	die "Usage: $0 <File | URI>\n";
+}
+if($uri =~ /^([[:alnum:]\+\.-]+):/)
+{
+	$mime_type = "x-scheme-handler/$1";
+}
+else
+{
+	$filepath = $uri;
+	$mime_type = magic($filepath) || File::MimeInfo::default($filepath);
+}
+%seen = ();
+@apps = grep {&filter_apps} mime_applications_all($mime_type);
+
+
+## Create Widgets
+$window = new Gtk2::Window('toplevel');
+$cntr0v = new Gtk2::VBox();
+$cntr0h = new Gtk2::HBox();
+$cntr1 = new Gtk2::VBox();
+$cntr2 = new Gtk2::HBox();
+$cntr3 = new Gtk2::HBox();
+$cntr3a = new Gtk2::HBox();
+$lbl1 = new Gtk2::Label();
+$scrwin = new Gtk2::ScrolledWindow();
+$slist = new Gtk2::SimpleList('icon'=>'pixbuf', 'label'=>'markup', 'command'=>'markup');
+$chkb_def = new Gtk2::CheckButton("Set default application for this type.");
+$btn_open = Gtk2::Button->new_from_stock('gtk-open');
+$btn_cncl = Gtk2::Button->new_from_stock('gtk-cancel');
+$btn_pref = Gtk2::Button->new_from_stock('gtk-preferences');
+
+## Setup Widgets
+$window->set_title("Select application to open with...");
+$window->set_default_size($win_w, $win_h);
+$window->move(($screen->get_width()-$win_w)/2, ($screen->get_height()-$win_h)/2);
+
+$window->signal_connect('destroy' => \&main_quit);
+$window->signal_connect('delete-event' => \&main_quit);
+add_key_binding($window, 'Escape', \&main_quit);
+add_key_binding($window, 'Return', \&btnclk_open);
+
+if(defined $filepath)
+{
+	$lbl1->set_markup(sprintf("File: <b>%s</b>", basename($filepath)) . "\n" . sprintf("MIME type: <i>%s</i>", $mime_type));
+}
+else
+{
+	$lbl1->set_markup(sprintf("URL: <b>%s</b>", $uri));
+}
+$lbl1->set_alignment(0, 0);
+$scrwin->set_policy('automatic', 'automatic');
+
+$slist->set_headers_visible(FALSE);
+$slist->set_rules_hint(TRUE);
+$slist->signal_connect('row-activated', \&dblclk_list);
+set_list_app_items($slist, @apps);
+
+$btn_open->signal_connect('clicked' => \&btnclk_open);
+$btn_cncl->signal_connect('clicked' => \&main_quit);
+set_stock_button_label($btn_pref, '');
+$btn_pref->signal_connect('clicked' => \&btnclk_edit);
+
+
+## Pack Widgets
+$window->add($cntr0v);
+$cntr0v->pack_start($cntr0h, TRUE, TRUE, 4);
+$cntr0h->pack_start($cntr1, TRUE, TRUE, 4);
+$cntr1->pack_start($lbl1, FALSE, TRUE, 0);
+$cntr1->pack_start($scrwin, TRUE, TRUE, 0);
+$cntr1->pack_start($cntr2, FALSE, TRUE, 0);
+$cntr1->pack_start($cntr3, FALSE, TRUE, 0);
+$scrwin->add($slist);
+$cntr2->pack_start($chkb_def, TRUE, TRUE, 0);
+$cntr3->pack_start($cntr3a, TRUE, TRUE, 0);
+$cntr3a->pack_start($btn_open, TRUE, FALSE, 0);
+$cntr3a->pack_start($btn_cncl, TRUE, FALSE, 0);
+$cntr3->pack_start($btn_pref, FALSE, FALSE, 0);
+
+## Begin
+$window->show_all();
+Gtk2->main();
+0;
+
+
+## Subroutines
+sub btnclk_open
+{
+	my ($app_n) = $slist->get_selected_indices();
+	my $selected_app = $apps[$app_n];
+	if(defined $selected_app)
+	{
+		if($chkb_def->get_active())
+		{
+			mime_applications_set_default($mime_type => $selected_app);
+		}
+		$selected_app->exec($filepath);
+	}
+	else
+	{
+		my $exe;
+		my $dlg = new Gtk2::FileChooserDialog("Select an Application", $window, 'open');
+		$dlg->add_button('gtk-execute', 'ok');
+		$dlg->add_button('gtk-cancel', 'cancel');
+		if($dlg->run() eq 'ok')
+		{
+			$exe = $dlg->get_filename();
+		}
+		$dlg->destroy();
+		if(defined $exe)
+		{
+			exec($exe, $filepath);
+			$dlg = new Gtk2::MessageDialog($window, 'modal', 'error', 'close', "Can not run it.");
+			$dlg->run();
+			$dlg->destroy();
+		}
+	}
+}
+sub dblclk_list
+{
+	my ($lst, $tpath, $tvcol) = @_;
+	$chkb_def->set_active(FALSE);
+	btnclk_open();
+}
+sub btnclk_edit
+{
+	system("sh", "-c", "$SCRIPT $ENV{'HOME'}/.local/share/applications/defaults.list &");
+	main_quit();
+}
+sub main_quit
+{
+	Gtk2->main_quit;
+}
+sub add_key_binding
+{
+	my ($widget, $keyname, $sub) = @_;
+	my $accelgroup = new Gtk2::AccelGroup();
+	my ($key, $modifier) = Gtk2::Accelerator->parse($keyname);
+	$accelgroup->connect($key, $modifier, 'visible', $sub);
+	$widget->add_accel_group($accelgroup);
+}
+sub set_stock_button_label
+{
+	my ($wdg, $text) = @_;
+	my ($a) = $wdg->get_children; # Alignment
+	my ($a) = $a->get_children; # HBox
+	my ($i, $l) = $a->get_children;
+	$l->set_label($text);
+}
+sub icondir2size
+{
+	return(($_[0] =~ /\/(\d+)x\d+/)[0]);
+}
+sub set_list_app_items
+{
+	my ($slist, @apps) = @_;
+	my $data = $slist->{'data'};
+	my $pref_size = 24;
+	for my $app (@apps)
+	{
+		my $pxb;
+		my $iconname = $app->get('Icon');
+		my $appname = $app->get('Name');
+		if($iconname)
+		{
+			my $iconpath;
+			if($iconname =~ /^\//)
+			{
+				$iconpath = $iconname;
+			}
+			else
+			{
+				my @dirs;
+				for my $c ('hi', 'lo')
+				{
+					my $d = "/usr/share/icons/${c}color";
+					my @small;
+					for my $e (sort {icondir2size($a) <=> icondir2size($b)} glob "$d/*x*/apps")
+					{
+						if(icondir2size($e) < $pref_size)
+						{
+							unshift @small, $e;
+						}
+						else
+						{
+							push @dirs, $e;
+						}
+					}
+					push @dirs, "$d/scalable/apps";
+					for my $e (@small)
+					{
+						push @dirs, $e;
+					}
+				}
+				push @dirs, '/usr/share/pixmaps';
+				
+				FINDICON:
+				for my $icondir (@dirs)
+				{
+					my $iconpath_test;
+					for my $iconext ('png', 'xpm', 'svg')
+					{
+						if($iconname =~ /\./)
+						{
+							$iconpath_test = $icondir . '/'. $iconname;
+						}
+						else
+						{
+							$iconpath_test = $icondir . '/'. $iconname . '.' . $iconext;
+						}
+						if(-e $iconpath_test)
+						{
+							$iconpath = $iconpath_test;
+							last FINDICON;
+						}
+						elsif($iconname =~ /\./)
+						{
+							next FINDICON;
+						}
+					}
+				}
+			}
+			if(defined $iconpath)
+			{
+				$pxb =  Gtk2::Gdk::Pixbuf->new_from_file_at_scale($iconpath, $pref_size, -1, TRUE);
+			}
+		}
+		
+		push @$data, [$pxb, '<big>' . $appname . '</big>', '<small>' . $app->get('Exec') . '</small>'];
+	}
+	$slist->select(0);
+	push @$data, [Gtk2::Button->new->render_icon('gtk-add', 'button'), '<big>' . "Custom application..." . '</big>'];
+}
+sub filter_apps
+{
+	my $a = $_;
+	return 0 if(!defined $a);
+	my $n = $a->get('Name');
+	my $s = $seen{$n};
+	$seen{$n} = 1;
+	return !$s;
+}
