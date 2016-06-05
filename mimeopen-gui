@@ -172,6 +172,14 @@ sub icondir2size
 {
 	return(($_[0] =~ /\/(\d+)x\d+/)[0]);
 }
+sub pango_escape
+{
+	my ($s) = @_;
+	$s =~ s/</&lt;/g;
+	$s =~ s/>/&gt;/g;
+	$s =~ s/&/&amp;/g;
+	return $s;
+}
 sub set_list_app_items
 {
 	my ($slist, @apps) = @_;
@@ -192,11 +200,11 @@ sub set_list_app_items
 			else
 			{
 				my @dirs;
-				for my $c ('hi', 'lo')
+				for my $c ('hicolor', 'locolor', 'gnome')
 				{
-					my $d = "/usr/share/icons/${c}color";
+					my $d = "/usr/share/icons/${c}";
 					my @small;
-					for my $e (sort {icondir2size($a) <=> icondir2size($b)} glob "$d/*x*/apps")
+					for my $e (sort {icondir2size($a) <=> icondir2size($b)} glob "$d/*x*/*")
 					{
 						if(icondir2size($e) < $pref_size)
 						{
@@ -207,7 +215,7 @@ sub set_list_app_items
 							push @dirs, $e;
 						}
 					}
-					push @dirs, "$d/scalable/apps";
+					push @dirs, "$d/scalable/*";
 					for my $e (@small)
 					{
 						push @dirs, $e;
@@ -247,7 +255,7 @@ sub set_list_app_items
 			}
 		}
 		
-		push @$data, [$pxb, '<big>' . $appname . '</big>', '<small>' . $app->get('Exec') . '</small>'];
+		push @$data, [$pxb, '<big>' . pango_escape($appname) . '</big>', '<small>' . $app->get('Exec') . '</small>'];
 	}
 	$slist->select(0);
 	push @$data, [Gtk2::Button->new->render_icon('gtk-add', 'button'), '<big>' . "Custom application..." . '</big>'];
