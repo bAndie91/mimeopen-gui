@@ -29,7 +29,30 @@ if($uri =~ /^([[:alnum:]\+\.-]+):/)
 else
 {
 	$filepath = $uri;
-	$mime_type = magic($filepath) || File::MimeInfo::default($filepath);
+	if(-d $filepath)
+	{
+		$mime_type = "inode/directory";
+	}
+	elsif(-p $filepath)
+	{
+		$mime_type = "inode/fifo";
+	}
+	elsif(-S $filepath)
+	{
+		$mime_type = "inode/socket";
+	}
+	elsif(-c $filepath)
+	{
+		$mime_type = "inode/chardevice";
+	}
+	elsif(-b $filepath)
+	{
+		$mime_type = "inode/blockdevice";
+	}
+	else
+	{
+		$mime_type = magic($filepath) || File::MimeInfo::default($filepath);
+	}
 }
 %seen = ();
 @apps = grep {&filter_apps} mime_applications_all($mime_type);
