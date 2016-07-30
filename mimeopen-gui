@@ -29,7 +29,14 @@ if($uri =~ /^([[:alnum:]\+\.-]+):/)
 else
 {
 	$filepath = $uri;
-	if(-d $filepath)
+	if(!-e $filepath)
+	{
+		$dlg = new Gtk2::MessageDialog(undef, 'modal', 'error', 'close', "File does not exist.");
+		$dlg->run();
+		$dlg->destroy();
+		exit 1;
+	}
+	elsif(-d $filepath)
 	{
 		$mime_type = "inode/directory";
 	}
