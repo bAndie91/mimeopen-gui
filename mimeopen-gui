@@ -73,13 +73,36 @@ $cntr1 = new Gtk2::VBox();
 $cntr2 = new Gtk2::HBox();
 $cntr3 = new Gtk2::HBox();
 $cntr3a = new Gtk2::HBox();
+$lbl1scr = new Gtk2::ScrolledWindow();
+$lbl2scr = new Gtk2::ScrolledWindow();
 $lbl1 = new Gtk2::Label();
+$lbl2 = new Gtk2::Label();
 $scrwin = new Gtk2::ScrolledWindow();
 $slist = new Gtk2::SimpleList('icon'=>'pixbuf', 'label'=>'markup', 'command'=>'markup');
 $chkb_def = new Gtk2::CheckButton("Set default application for this type.");
 $btn_open = Gtk2::Button->new_from_stock('gtk-open');
 $btn_cncl = Gtk2::Button->new_from_stock('gtk-cancel');
 $btn_pref = Gtk2::Button->new_from_stock('gtk-preferences');
+
+
+## Pack Widgets
+$window->add($cntr0v);
+$cntr0v->pack_start($cntr0h, TRUE, TRUE, 4);
+$cntr0h->pack_start($cntr1, TRUE, TRUE, 4);
+$cntr1->pack_start($lbl1scr, FALSE, TRUE, 0);
+$lbl1scr->add_with_viewport($lbl1);
+$cntr1->pack_start($lbl2scr, FALSE, TRUE, 0) if defined $filepath;
+$lbl2scr->add_with_viewport($lbl2);
+$cntr1->pack_start($scrwin, TRUE, TRUE, 0);
+$cntr1->pack_start($cntr2, FALSE, TRUE, 0);
+$cntr1->pack_start($cntr3, FALSE, TRUE, 0);
+$scrwin->add($slist);
+$cntr2->pack_start($chkb_def, TRUE, TRUE, 0);
+$cntr3->pack_start($cntr3a, TRUE, TRUE, 0);
+$cntr3a->pack_start($btn_open, TRUE, FALSE, 0);
+$cntr3a->pack_start($btn_cncl, TRUE, FALSE, 0);
+$cntr3->pack_start($btn_pref, FALSE, FALSE, 0);
+
 
 ## Setup Widgets
 $window->set_title("Select application to open with...");
@@ -90,18 +113,32 @@ $window->signal_connect('destroy' => \&main_quit);
 $window->signal_connect('delete-event' => \&main_quit);
 add_key_binding($window, 'Escape', \&main_quit);
 add_key_binding($window, 'Return', \&btnclk_open);
+$window->set_focus($slist);
+
+$lbl1scr->set_policy('never', 'never');
+$lbl2scr->set_policy('never', 'never');
+$lbl1scr->get_children->set_shadow_type('none');
+$lbl2scr->get_children->set_shadow_type('none');
+$lbl1scr->set_size_request($win_w - 5, -1);
+$lbl2scr->set_size_request($win_w - 5, -1);
 
 if(defined $filepath)
 {
-	$lbl1->set_markup(sprintf("File: <b>%s</b>", basename($filepath)) . "\n" . sprintf("MIME type: <i>%s</i>", $mime_type));
+	$lbl1->set_markup(sprintf("File: <b>%s</b>", basename($filepath)));
+	$lbl2->set_markup(sprintf("MIME type: <i>%s</i>", $mime_type));
 }
 else
 {
 	$lbl1->set_markup(sprintf("URL: <b>%s</b>", $uri));
 }
 $lbl1->set_alignment(0, 0);
-$scrwin->set_policy('automatic', 'automatic');
+$lbl2->set_alignment(0, 0);
+$lbl1->set_selectable(TRUE);
+$lbl2->set_selectable(TRUE);
+$lbl1scr->get_children->signal_connect('scroll-event' => \&scroll_viewport);
+$lbl2scr->get_children->signal_connect('scroll-event' => \&scroll_viewport);
 
+$scrwin->set_policy('automatic', 'automatic');
 $slist->set_headers_visible(FALSE);
 $slist->set_rules_hint(TRUE);
 $slist->signal_connect('row-activated', \&dblclk_list);
@@ -113,20 +150,6 @@ set_stock_button_label($btn_pref, '');
 $btn_pref->signal_connect('clicked' => \&btnclk_edit);
 
 
-## Pack Widgets
-$window->add($cntr0v);
-$cntr0v->pack_start($cntr0h, TRUE, TRUE, 4);
-$cntr0h->pack_start($cntr1, TRUE, TRUE, 4);
-$cntr1->pack_start($lbl1, FALSE, TRUE, 0);
-$cntr1->pack_start($scrwin, TRUE, TRUE, 0);
-$cntr1->pack_start($cntr2, FALSE, TRUE, 0);
-$cntr1->pack_start($cntr3, FALSE, TRUE, 0);
-$scrwin->add($slist);
-$cntr2->pack_start($chkb_def, TRUE, TRUE, 0);
-$cntr3->pack_start($cntr3a, TRUE, TRUE, 0);
-$cntr3a->pack_start($btn_open, TRUE, FALSE, 0);
-$cntr3a->pack_start($btn_cncl, TRUE, FALSE, 0);
-$cntr3->pack_start($btn_pref, FALSE, FALSE, 0);
 
 ## Begin
 $window->show_all();
@@ -298,4 +321,16 @@ sub filter_apps
 	my $s = $seen{$n};
 	$seen{$n} = 1;
 	return !$s;
+}
+sub scroll_viewport
+{
+	my ($self, $event) = @_;
+	my $scrwin = $self->parent;
+	my $dir = $event->direction;
+	my $adj = $scrwin->get_hadjustment;
+	my $delta = ($dir eq 'down' or $dir eq 'left') ? +10 : -10;
+	my $new = $adj->value + $delta;
+	my $width = $self->get_allocation->width;
+	$new = $adj->upper - $width if $new + $width > $adj->upper;
+	$adj->set_value($new);
 }
