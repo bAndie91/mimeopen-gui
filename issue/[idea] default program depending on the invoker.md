@@ -1,5 +1,5 @@
-Author: myrdd <dev@256k.de>
-Date: Apr 27, 2018
+> Author: myrdd <dev@256k.de>
+> Date: Apr 27, 2018
 
 I've been trying to create a shell script which conditionally opens a file with a specific program and open a selection dialog else, like this:
 
@@ -26,8 +26,8 @@ yes, that's why I tried to work around the standard ;)
 
 ---
 
-Author: bAndie91 (Owner)
-Date: Mar 10, 2020
+> Author: bAndie91 (Owner)
+> Date: Mar 10, 2020
 
 hi @myrdd , getting back to your query, I can suggest 2 ways to implement your logic in a more-or-less modular way, by not building in custom logic in mimeopen-gui:
 
