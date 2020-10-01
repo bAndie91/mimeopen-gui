@@ -80,6 +80,7 @@ $lbl1 = new Gtk2::Label();
 $lbl2 = new Gtk2::Label();
 $scrwin = new Gtk2::ScrolledWindow();
 $slist = new Gtk2::SimpleList('icon'=>'pixbuf', 'label'=>'markup', 'command'=>'markup');
+$input_cmd = new Gtk2::Entry();
 $chkb_def = new Gtk2::CheckButton("Set default application for this type.");
 $btn_open = Gtk2::Button->new_from_stock('gtk-open');
 $btn_cncl = Gtk2::Button->new_from_stock('gtk-cancel');
@@ -95,6 +96,7 @@ $lbl1scr->add_with_viewport($lbl1);
 $cntr1->pack_start($lbl2scr, FALSE, TRUE, 0) if defined $filepath;
 $lbl2scr->add_with_viewport($lbl2);
 $cntr1->pack_start($scrwin, TRUE, TRUE, 0);
+$cntr1->pack_start($input_cmd, FALSE, TRUE, 0);
 $cntr1->pack_start($cntr2, FALSE, TRUE, 0);
 $cntr1->pack_start($cntr3, FALSE, TRUE, 0);
 $scrwin->add($slist);
@@ -115,6 +117,8 @@ $window->signal_connect('delete-event' => \&main_quit);
 add_key_binding($window, 'Escape', \&main_quit);
 add_key_binding($window, 'Return', \&btnclk_open);
 $window->set_focus($slist);
+
+$input_cmd->signal_connect('changed', \&custom_cmd_changed);
 
 $lbl1scr->set_policy('never', 'never');
 $lbl2scr->set_policy('never', 'never');
@@ -142,6 +146,7 @@ $lbl2scr->get_children->signal_connect('scroll-event' => \&scroll_viewport);
 $scrwin->set_policy('automatic', 'automatic');
 $slist->set_headers_visible(FALSE);
 $slist->set_rules_hint(TRUE);
+$slist->get_selection->signal_connect('changed', \&click_list);
 $slist->signal_connect('row-activated', \&dblclk_list);
 set_list_app_items($slist, @apps);
 
@@ -159,36 +164,78 @@ Gtk2->main();
 
 
 ## Subroutines
+
+$custom_command_input_changed_signal_lock = 0;
+$app_selection_changed_signal_lock = 0;
+sub custom_cmd_changed
+{
+	my ($entry) = @_;
+	if(!$custom_command_input_changed_signal_lock)
+	{
+		$app_selection_changed_signal_lock = 1;
+		$slist->get_selection->unselect_all;
+		$app_selection_changed_signal_lock = 0;
+		$chkb_def->set_sensitive(FALSE);
+	}
+	return 1;
+}
+sub click_list
+{
+	if(!$app_selection_changed_signal_lock)
+	{
+		my ($app_n) = $slist->get_selected_indices();
+		my $selected_app = $apps[$app_n];
+		if(defined $selected_app)
+		{
+			my $exec_str = $selected_app->get('Exec');
+			$custom_command_input_changed_signal_lock = 1;
+			$input_cmd->set_text($exec_str);
+			$custom_command_input_changed_signal_lock = 0;
+			$chkb_def->set_sensitive(TRUE);
+		}
+	}
+	return 1;
+}
 sub btnclk_open
 {
 	my ($app_n) = $slist->get_selected_indices();
-	my $selected_app = $apps[$app_n];
-	if(defined $selected_app)
+	if(defined $app_n)
 	{
-		if($chkb_def->get_active())
+		my $selected_app = $apps[$app_n];
+		if(defined $selected_app)
 		{
-			mime_applications_set_default($mime_type => $selected_app);
+			if($chkb_def->get_active)
+			{
+				mime_applications_set_default($mime_type => $selected_app);
+			}
+			$selected_app->exec($filepath);
 		}
-		$selected_app->exec($filepath);
+		else
+		{
+			my $exe;
+			my $dlg = new Gtk2::FileChooserDialog("Select an Application", $window, 'open');
+			$dlg->add_button('gtk-execute', 'ok');
+			$dlg->add_button('gtk-cancel', 'cancel');
+			if($dlg->run() eq 'ok')
+			{
+				$exe = $dlg->get_filename();
+			}
+			$dlg->destroy();
+			if(defined $exe)
+			{
+				exec($exe, $filepath);
+				$dlg = new Gtk2::MessageDialog($window, 'modal', 'error', 'close', "Can not run it.");
+				$dlg->run();
+				$dlg->destroy();
+			}
+		}
 	}
 	else
 	{
-		my $exe;
-		my $dlg = new Gtk2::FileChooserDialog("Select an Application", $window, 'open');
-		$dlg->add_button('gtk-execute', 'ok');
-		$dlg->add_button('gtk-cancel', 'cancel');
-		if($dlg->run() eq 'ok')
-		{
-			$exe = $dlg->get_filename();
-		}
-		$dlg->destroy();
-		if(defined $exe)
-		{
-			exec($exe, $filepath);
-			$dlg = new Gtk2::MessageDialog($window, 'modal', 'error', 'close', "Can not run it.");
-			$dlg->run();
-			$dlg->destroy();
-		}
+		my $exec_str = $input_cmd->get_text;
+		my $desktop_entry = "[Desktop Entry]\nName=mimeopen-gui custom command\nExec=$exec_str\nType=Application\nStartupNotify=true";
+		my $app = File::DesktopEntry->new(\$desktop_entry);
+		$app->exec($filepath);
 	}
 }
 sub dblclk_list
