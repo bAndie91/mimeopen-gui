@@ -129,12 +129,13 @@ $lbl2scr->set_size_request($win_w - 5, -1);
 
 if(defined $filepath)
 {
-	$lbl1->set_markup(sprintf("File: <b>%s</b>", basename($filepath)));
-	$lbl2->set_markup(sprintf("MIME type: <i>%s</i>", $mime_type));
+	$lbl1->set_markup(sprintf("File: <b>%s</b>", Glib::Markup::escape_text(basename($filepath))));
+	$lbl1->set_tooltip_text(Glib::Markup::escape_text($filepath));
+	$lbl2->set_markup(sprintf("MIME type: <i>%s</i>", Glib::Markup::escape_text($mime_type)));
 }
 else
 {
-	$lbl1->set_markup(sprintf("URL: <b>%s</b>", $uri));
+	$lbl1->set_markup(sprintf("URL: <b>%s</b>", Glib::Markup::escape_text($uri)));
 }
 $lbl1->set_alignment(0, 0);
 $lbl2->set_alignment(0, 0);
@@ -153,6 +154,7 @@ set_list_app_items($slist, @apps);
 $btn_open->signal_connect('clicked' => \&btnclk_open);
 $btn_cncl->signal_connect('clicked' => \&main_quit);
 set_stock_button_label($btn_pref, '');
+$btn_pref->set_tooltip_text("open config file to edit MIME type - Application assignments");
 $btn_pref->signal_connect('clicked' => \&btnclk_edit);
 
 
