@@ -210,7 +210,7 @@ sub btnclk_open
 			{
 				mime_applications_set_default($mime_type => $selected_app);
 			}
-			$selected_app->exec($filepath);
+			$selected_app->exec(encode('utf8', $filepath));
 		}
 		else
 		{
@@ -237,7 +237,7 @@ sub btnclk_open
 		my $exec_str = $input_cmd->get_text;
 		my $desktop_entry = "[Desktop Entry]\nName=mimeopen-gui custom command\nExec=$exec_str\nType=Application\nStartupNotify=true";
 		my $app = File::DesktopEntry->new(\$desktop_entry);
-		$app->exec($filepath);
+		$app->exec(encode('utf8', $filepath));
 	}
 }
 sub dblclk_list
