@@ -2,6 +2,7 @@
 
 use Encode qw/encode decode/;
 use Data::Dumper;
+use File::MimeInfo;
 use File::MimeInfo::Applications;
 use File::MimeInfo::Magic qw/magic/;
 use File::Basename qw/basename/;
@@ -59,7 +60,9 @@ else
 	}
 	else
 	{
-		$mime_type = magic($filepath) || File::MimeInfo::default($filepath);
+		$mime_type = File::MimeInfo::mimetype($filepath);
+		$mime_type = magic($filepath) if not $mime_type;
+		$mime_type = File::MimeInfo::default($filepath) if not $mime_type;
 	}
 }
 %seen = ();
