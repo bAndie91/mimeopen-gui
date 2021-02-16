@@ -370,10 +370,10 @@ sub filter_apps
 {
 	my $a = $_;
 	return 0 if(!defined $a);
-	my $n = $a->get('Name');
-	my $s = $seen{$n};
-	$seen{$n} = 1;
-	return !$s;
+	my $x = $a->get('Exec');
+	my $had_seen = $seen{$x};
+	$seen{$x} = 1;
+	return !$had_seen;
 }
 sub scroll_viewport
 {
