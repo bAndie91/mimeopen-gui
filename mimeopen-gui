@@ -11,6 +11,8 @@ use Glib qw/TRUE FALSE/;
 use Gtk2 qw/-init/;
 use Gtk2::SimpleList;
 
+
+
 $SCRIPT = $0;
 $0 = "mimeopen-gui";
 $screen = Gtk2::Gdk::Screen->get_default;
@@ -213,7 +215,7 @@ sub btnclk_open
 			{
 				mime_applications_set_default($mime_type => $selected_app);
 			}
-			$selected_app->exec(encode('utf8', $filepath));
+			$selected_app->exec($filepath);
 		}
 		else
 		{
@@ -240,7 +242,7 @@ sub btnclk_open
 		my $exec_str = $input_cmd->get_text;
 		my $desktop_entry = "[Desktop Entry]\nName=mimeopen-gui custom command\nExec=$exec_str\nType=Application\nStartupNotify=true";
 		my $app = File::DesktopEntry->new(\$desktop_entry);
-		$app->exec(encode('utf8', $filepath));
+		$app->exec($filepath);
 	}
 }
 sub dblclk_list
