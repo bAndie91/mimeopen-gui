@@ -10,10 +10,12 @@ use File::DesktopEntry;
 use Glib qw/TRUE FALSE/;
 use Gtk2 qw/-init/;
 use Gtk2::SimpleList;
+eval q{ use Linux::UserXAttr ':all'; };
+$xattr_available = $@ ? 0 : 1;
 
 
 
-$SCRIPT = $0;
+$MIMEOPEN_COMMAND = $0;
 $0 = "mimeopen-gui";
 $screen = Gtk2::Gdk::Screen->get_default;
 $win_w = 300;
@@ -22,6 +24,7 @@ $win_h = 300;
 
 ## MIME Apps
 $uri = decode('utf8', $ARGV[0]);
+$mime_type = undef;
 if(not defined $uri)
 {
 	die "Usage: $0 [<File | URI>]\n";
@@ -40,32 +43,40 @@ else
 		$dlg->destroy();
 		exit 1;
 	}
-	elsif(-d $filepath)
+	elsif($xattr_available)
 	{
-		$mime_type = "inode/directory";
+		$mime_type = getxattr($filepath, 'user.mime_type');
 	}
-	elsif(-p $filepath)
+	
+	if(not defined $mime_type)
 	{
-		$mime_type = "inode/fifo";
-	}
-	elsif(-S $filepath)
-	{
-		$mime_type = "inode/socket";
-	}
-	elsif(-c $filepath)
-	{
-		$mime_type = "inode/chardevice";
-	}
-	elsif(-b $filepath)
-	{
-		$mime_type = "inode/blockdevice";
-	}
-	else
-	{
-		$mime_type = File::MimeInfo::mimetype($filepath);
-		$mime_type = magic($filepath) if not $mime_type;
-		$mime_type = File::MimeInfo::default($filepath) if not $mime_type;
-	}
+		if(-d $filepath)
+		{
+			$mime_type = "inode/directory";
+		}
+		elsif(-p $filepath)
+		{
+			$mime_type = "inode/fifo";
+		}
+		elsif(-S $filepath)
+		{
+			$mime_type = "inode/socket";
+		}
+		elsif(-c $filepath)
+		{
+			$mime_type = "inode/chardevice";
+		}
+		elsif(-b $filepath)
+		{
+			$mime_type = "inode/blockdevice";
+		}
+		else
+		{
+			$mime_type = File::MimeInfo::mimetype($filepath);
+			$mime_type = magic($filepath) if not $mime_type;
+			$mime_type = File::MimeInfo::default($filepath) if not $mime_type;
+		}
+    }
 }
 %seen = ();
 @apps = grep {&filter_apps} mime_applications_all($mime_type);
@@ -253,7 +264,8 @@ sub dblclk_list
 }
 sub btnclk_edit
 {
-	system("sh", "-c", "$SCRIPT $ENV{'HOME'}/.local/share/applications/defaults.list &");
+	$ENV{'MIMEOPEN_COMMAND'} = $MIMEOPEN_COMMAND;
+	system('sh', '-c', 'command $MIMEOPEN_COMMAND $HOME/.local/share/applications/defaults.list &');
 	main_quit();
 }
 sub main_quit
