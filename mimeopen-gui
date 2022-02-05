@@ -39,6 +39,8 @@ else
 	if(!-e $filepath)
 	{
 		$dlg = new Gtk2::MessageDialog(undef, 'modal', 'error', 'close', "File does not exist.");
+		$dlg->set_title("File does not exist");
+		$dlg->format_secondary_text($filepath);
 		$dlg->run();
 		$dlg->destroy();
 		exit 1;
