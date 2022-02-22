@@ -3,6 +3,7 @@
 use Encode qw/encode decode/;
 use Data::Dumper;
 use File::MimeInfo;
+use File::MimeInfo qw/mimetype_canon/;
 use File::MimeInfo::Applications;
 use File::MimeInfo::Magic qw/magic/;
 use File::Basename qw/basename/;
@@ -80,8 +81,12 @@ else
 		}
     }
 }
+
+$canonical_mime_type = mimetype_canon $mime_type;
 %seen = ();
-@apps = grep {&filter_apps} mime_applications_all($mime_type);
+@apps = grep {&filter_apps} mime_applications_all($mime_type),
+	File::MimeInfo::Applications::_default($mime_type),
+	File::MimeInfo::Applications::_others($mime_type);
 
 
 ## Create Widgets
@@ -94,8 +99,10 @@ $cntr3 = new Gtk2::HBox();
 $cntr3a = new Gtk2::HBox();
 $lbl1scr = new Gtk2::ScrolledWindow();
 $lbl2scr = new Gtk2::ScrolledWindow();
+$lbl3scr = new Gtk2::ScrolledWindow();
 $lbl1 = new Gtk2::Label();
 $lbl2 = new Gtk2::Label();
+$lbl3 = new Gtk2::Label();
 $scrwin = new Gtk2::ScrolledWindow();
 $slist = new Gtk2::SimpleList('icon'=>'pixbuf', 'label'=>'markup', 'command'=>'markup');
 $input_cmd = new Gtk2::Entry();
@@ -111,8 +118,10 @@ $cntr0v->pack_start($cntr0h, TRUE, TRUE, 4);
 $cntr0h->pack_start($cntr1, TRUE, TRUE, 4);
 $cntr1->pack_start($lbl1scr, FALSE, TRUE, 0);
 $lbl1scr->add_with_viewport($lbl1);
-$cntr1->pack_start($lbl2scr, FALSE, TRUE, 0) if defined $filepath;
+$cntr1->pack_start($lbl2scr, FALSE, TRUE, 0);
 $lbl2scr->add_with_viewport($lbl2);
+$cntr1->pack_start($lbl3scr, FALSE, TRUE, 0);
+$lbl3scr->add_with_viewport($lbl3);
 $cntr1->pack_start($scrwin, TRUE, TRUE, 0);
 $cntr1->pack_start($input_cmd, FALSE, TRUE, 0);
 $cntr1->pack_start($cntr2, FALSE, TRUE, 0);
@@ -140,27 +149,35 @@ $input_cmd->signal_connect('changed', \&custom_cmd_changed);
 
 $lbl1scr->set_policy('never', 'never');
 $lbl2scr->set_policy('never', 'never');
+$lbl3scr->set_policy('never', 'never');
 $lbl1scr->get_children->set_shadow_type('none');
 $lbl2scr->get_children->set_shadow_type('none');
+$lbl3scr->get_children->set_shadow_type('none');
 $lbl1scr->set_size_request($win_w - 5, -1);
 $lbl2scr->set_size_request($win_w - 5, -1);
+$lbl3scr->set_size_request($win_w - 5, -1);
 
 if(defined $filepath)
 {
 	$lbl1->set_markup(sprintf("File: <b>%s</b>", Glib::Markup::escape_text(basename($filepath))));
 	$lbl1->set_tooltip_text(Glib::Markup::escape_text($filepath));
-	$lbl2->set_markup(sprintf("MIME type: <i>%s</i>", Glib::Markup::escape_text($mime_type)));
 }
 else
 {
 	$lbl1->set_markup(sprintf("URL: <b>%s</b>", Glib::Markup::escape_text($uri)));
 }
+$lbl2->set_markup(sprintf("MIME type: <i>%s</i>", Glib::Markup::escape_text($mime_type)));
+$lbl3->set_markup(sprintf("Canonical MIME type: <i>%s</i>", Glib::Markup::escape_text($canonical_mime_type)));
+
 $lbl1->set_alignment(0, 0);
 $lbl2->set_alignment(0, 0);
+$lbl3->set_alignment(0, 0);
 $lbl1->set_selectable(TRUE);
 $lbl2->set_selectable(TRUE);
+$lbl3->set_selectable(TRUE);
 $lbl1scr->get_children->signal_connect('scroll-event' => \&scroll_viewport);
 $lbl2scr->get_children->signal_connect('scroll-event' => \&scroll_viewport);
+$lbl3scr->get_children->signal_connect('scroll-event' => \&scroll_viewport);
 
 $scrwin->set_policy('automatic', 'automatic');
 $slist->set_headers_visible(FALSE);
@@ -179,6 +196,10 @@ $btn_pref->signal_connect('clicked' => \&btnclk_edit);
 
 ## Begin
 $window->show_all();
+if($canonical_mime_type eq $mime_type)
+{
+	$lbl3scr->hide;
+}
 Gtk2->main();
 0;
 
@@ -382,15 +403,17 @@ sub set_list_app_items
 	$slist->select(0);
 	push @$data, [Gtk2::Button->new->render_icon('gtk-add', 'button'), '<big>' . "Custom application..." . '</big>'];
 }
+
 sub filter_apps
 {
 	my $a = $_;
-	return 0 if(!defined $a);
+	return 0 if !defined $a;
 	my $x = $a->get('Exec');
 	my $had_seen = $seen{$x};
 	$seen{$x} = 1;
 	return !$had_seen;
 }
+
 sub scroll_viewport
 {
 	my ($self, $event) = @_;
