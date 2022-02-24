@@ -85,9 +85,16 @@ else
 
 $canonical_mime_type = mimetype_canon $mime_type;
 %seen = ();
-@apps = grep {&filter_apps} mime_applications_all($mime_type),
-	File::MimeInfo::Applications::_default($mime_type),
-	File::MimeInfo::Applications::_others($mime_type);
+@all_canonical_apps = mime_applications_all($mime_type);
+map {$_->{'mime_type'} = $canonical_mime_type if defined $_} @all_canonical_apps;
+@default_nonaliased_apps = File::MimeInfo::Applications::_default($mime_type);
+@other_nonaliased_apps = File::MimeInfo::Applications::_others($mime_type);
+map {$_->{'mime_type'} = $mime_type if defined $_} @default_nonaliased_apps, @other_nonaliased_apps;
+
+@default_apps = ($all_canonical_apps[0], @default_nonaliased_apps);
+map {$_->{'is_default_app'} = 1 if defined $_} @default_apps;
+@apps = grep {&filter_apps} @default_apps, @all_canonical_apps, @other_nonaliased_apps;
+
 
 
 ## Create Widgets
@@ -95,7 +102,7 @@ $window = new Gtk2::Window('toplevel');
 $cntr0v = new Gtk2::VBox();
 $cntr0h = new Gtk2::HBox();
 $cntr1 = new Gtk2::VBox();
-$cntr2 = new Gtk2::HBox();
+#$cntr2 = new Gtk2::HBox();
 $cntr3 = new Gtk2::HBox();
 $cntr3a = new Gtk2::HBox();
 $lbl1scr = new Gtk2::ScrolledWindow();
@@ -105,9 +112,9 @@ $lbl1 = new Gtk2::Label();
 $lbl2 = new Gtk2::Label();
 $lbl3 = new Gtk2::Label();
 $scrwin = new Gtk2::ScrolledWindow();
-$slist = new Gtk2::SimpleList('icon'=>'pixbuf', 'label'=>'markup', 'command'=>'markup');
+$slist = new Gtk2::SimpleList('icon'=>'pixbuf', 'label'=>'markup', 'is_default'=>'bool');
+$slist_default_app_checkbox_colum_index = 2;
 $input_cmd = new Gtk2::Entry();
-$chkb_def = new Gtk2::CheckButton("Set default application for this type.");
 $btn_open = Gtk2::Button->new_from_stock('gtk-open');
 $btn_cncl = Gtk2::Button->new_from_stock('gtk-cancel');
 $btn_pref = Gtk2::Button->new_from_stock('gtk-preferences');
@@ -125,10 +132,9 @@ $cntr1->pack_start($lbl3scr, FALSE, TRUE, 0);
 $lbl3scr->add_with_viewport($lbl3);
 $cntr1->pack_start($scrwin, TRUE, TRUE, 0);
 $cntr1->pack_start($input_cmd, FALSE, TRUE, 0);
-$cntr1->pack_start($cntr2, FALSE, TRUE, 0);
+#$cntr1->pack_start($cntr2, FALSE, TRUE, 0);
 $cntr1->pack_start($cntr3, FALSE, TRUE, 0);
 $scrwin->add($slist);
-$cntr2->pack_start($chkb_def, TRUE, TRUE, 0);
 $cntr3->pack_start($cntr3a, TRUE, TRUE, 0);
 $cntr3a->pack_start($btn_open, TRUE, FALSE, 0);
 $cntr3a->pack_start($btn_cncl, TRUE, FALSE, 0);
@@ -187,6 +193,11 @@ $slist->get_selection->signal_connect('changed', \&click_list);
 $slist->signal_connect('row-activated', \&dblclk_list);
 set_list_app_items($slist, @apps);
 
+$checkbox_column = $slist->get_column($slist_default_app_checkbox_colum_index);
+$toggle_cell_renderer = $checkbox_column->get_cell_renderers;
+$toggle_cell_renderer->signal_connect('toggled', \&toggle_default_app_checkbox);
+
+
 $btn_open->signal_connect('clicked' => \&btnclk_open);
 $btn_cncl->signal_connect('clicked' => \&main_quit);
 set_stock_button_label($btn_pref, '');
@@ -209,35 +220,75 @@ Gtk2->main();
 
 $custom_command_input_changed_signal_lock = 0;
 $app_selection_changed_signal_lock = 0;
+
 sub custom_cmd_changed
 {
 	my ($entry) = @_;
-	if(!$custom_command_input_changed_signal_lock)
-	{
-		$app_selection_changed_signal_lock = 1;
-		$slist->get_selection->unselect_all;
-		$app_selection_changed_signal_lock = 0;
-		$chkb_def->set_sensitive(FALSE);
-	}
+	return 1 if $custom_command_input_changed_signal_lock;
+	
+	$app_selection_changed_signal_lock = 1;
+	$slist->get_selection->unselect_all;
+	$app_selection_changed_signal_lock = 0;
 	return 1;
 }
+
 sub click_list
 {
-	if(!$app_selection_changed_signal_lock)
+	return 1 if $app_selection_changed_signal_lock;
+	
+	my ($app_n) = $slist->get_selected_indices();
+	my $selected_app = $apps[$app_n];
+	if(defined $selected_app)
 	{
-		my ($app_n) = $slist->get_selected_indices();
-		my $selected_app = $apps[$app_n];
-		if(defined $selected_app)
-		{
-			my $exec_str = $selected_app->get('Exec');
-			$custom_command_input_changed_signal_lock = 1;
-			$input_cmd->set_text($exec_str);
-			$custom_command_input_changed_signal_lock = 0;
-			$chkb_def->set_sensitive(TRUE);
-		}
+		my $exec_str = $selected_app->get('Exec');
+		$custom_command_input_changed_signal_lock = 1;
+		$input_cmd->set_text($exec_str);
+		$custom_command_input_changed_signal_lock = 0;
 	}
 	return 1;
 }
+
+sub toggle_default_app_checkbox
+{
+	my ($cellrenderer, $slist_index) = @_;
+	my $is_ticked = $slist->{'data'}->[$slist_index]->[$slist_default_app_checkbox_colum_index];
+	my $done = 0;
+	if($slist_index < scalar @apps)
+	{
+		my $selected_app = $apps[$slist_index];
+		my $mime_type = $selected_app->{'mime_type'};
+		
+		if($is_ticked)
+		{
+			eval { mime_applications_set_default($mime_type => $selected_app); 1 };
+			$done = !$@;
+		}
+		else
+		{
+			eval { File::MimeInfo::Applications::_write_list($mime_type => ''); 1 };
+			$done = !$@;
+		}
+		
+		if($done)
+		{
+			if($is_ticked)
+			{
+				# untick all other applistions checkboxes (of the same mime type)
+				for my $row_index (0 .. $#{$slist->{'data'}})
+				{
+					next if $row_index == $slist_index;
+					next if $row_index < scalar @apps and $apps[$row_index]->{'mime_type'} ne $mime_type;
+					$slist->{'data'}->[$row_index]->[$slist_default_app_checkbox_colum_index] = FALSE;
+				}
+			}
+		}
+	}
+	if(!$done)
+	{
+		$slist->{'data'}->[$slist_index]->[$slist_default_app_checkbox_colum_index] = !$is_ticked;
+	}
+}
+
 sub btnclk_open
 {
 	my ($app_n) = $slist->get_selected_indices();
@@ -246,10 +297,6 @@ sub btnclk_open
 		my $selected_app = $apps[$app_n];
 		if(defined $selected_app)
 		{
-			if($chkb_def->get_active)
-			{
-				mime_applications_set_default($mime_type => $selected_app);
-			}
 			$selected_app->run($filepath);
 			main_quit();
 		}
@@ -266,6 +313,7 @@ sub btnclk_open
 			$dlg->destroy();
 			if(defined $exe)
 			{
+				# TODO: quit gtk thread cleanly
 				exec($exe, $filepath);
 				$dlg = new Gtk2::MessageDialog($window, 'modal', 'error', 'close', "Can not run it.");
 				$dlg->run();
@@ -287,22 +335,25 @@ sub btnclk_open
 		main_quit();
 	}
 }
+
 sub dblclk_list
 {
 	my ($lst, $tpath, $tvcol) = @_;
-	$chkb_def->set_active(FALSE);
 	btnclk_open();
 }
+
 sub btnclk_edit
 {
 	$ENV{'MIMEOPEN_COMMAND'} = $MIMEOPEN_COMMAND;
 	system('sh', '-c', 'command $MIMEOPEN_COMMAND $HOME/.local/share/applications/defaults.list &');
 	main_quit();
 }
+
 sub main_quit
 {
 	Gtk2->main_quit;
 }
+
 sub add_key_binding
 {
 	my ($widget, $keyname, $sub) = @_;
@@ -311,6 +362,7 @@ sub add_key_binding
 	$accelgroup->connect($key, $modifier, 'visible', $sub);
 	$widget->add_accel_group($accelgroup);
 }
+
 sub set_stock_button_label
 {
 	my ($wdg, $text) = @_;
@@ -319,10 +371,12 @@ sub set_stock_button_label
 	my ($i, $l) = $a->get_children;
 	$l->set_label($text);
 }
+
 sub icondir2size
 {
 	return(($_[0] =~ /\/(\d+)x\d+/)[0]);
 }
+
 sub pango_escape
 {
 	my ($s) = @_;
@@ -331,13 +385,18 @@ sub pango_escape
 	$s =~ s/&/&amp;/g;
 	return $s;
 }
+
 sub set_list_app_items
 {
 	my ($slist, @apps) = @_;
-	my $data = $slist->{'data'};
+	my $slist_data = $slist->{'data'};
 	my $pref_size = 24;
+	my $select_index_by_default = undef;
+	my $index = -1;
+	
 	for my $app (@apps)
 	{
+		$index ++;
 		my $pxb;
 		my $iconname = $app->get('Icon');
 		my $appname = $app->get('Name');
@@ -402,17 +461,16 @@ sub set_list_app_items
 			}
 			if(defined $iconpath)
 			{
-				$pxb =  Gtk2::Gdk::Pixbuf->new_from_file_at_scale($iconpath, $pref_size, -1, TRUE);
+				$pxb = Gtk2::Gdk::Pixbuf->new_from_file_at_scale($iconpath, $pref_size, -1, TRUE);
 			}
 		}
 		
-		push @$data, [$pxb, 
-			'<big>' . pango_escape($appname) . '</big>', 
-			'<small>' . $app->get('Exec') . '</small>'];
+		$select_index_by_default = $index if not defined $select_index_by_default and $app->{'is_default_app'};
+		push @$slist_data, [$pxb, sprintf("<big>%s</big>\n<small>%s</small>", pango_escape($appname), pango_escape($app->get('Exec'))), $app->{'is_default_app'} ? TRUE : FALSE];
 	}
-	$slist->select(0);
-	push @$data, [Gtk2::Button->new->render_icon('gtk-add', 'button'), 
-		'<big>' . "Custom application..." . '</big>'];
+	
+	$slist->select($select_index_by_default || 0);
+	push @$slist_data, [Gtk2::Button->new->render_icon('gtk-add', 'button'), '<big>'."Custom application...".'</big>', FALSE];
 }
 
 sub filter_apps
