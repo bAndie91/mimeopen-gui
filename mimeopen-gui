@@ -13,6 +13,7 @@ use Gtk2 qw/-init/;
 use Gtk2::SimpleList;
 eval q{ use Linux::UserXAttr ':all'; };
 $xattr_available = $@ ? 0 : 1;
+$LF = "\n";
 
 
 
@@ -249,7 +250,8 @@ sub btnclk_open
 			{
 				mime_applications_set_default($mime_type => $selected_app);
 			}
-			$selected_app->exec($filepath);
+			$selected_app->run($filepath);
+			main_quit();
 		}
 		else
 		{
@@ -274,9 +276,15 @@ sub btnclk_open
 	else
 	{
 		my $exec_str = $input_cmd->get_text;
-		my $desktop_entry = "[Desktop Entry]\nName=mimeopen-gui custom command\nExec=$exec_str\nType=Application\nStartupNotify=true";
+		my $desktop_entry = 
+			"[Desktop Entry]".$LF.
+			"Name=mimeopen-gui custom command".$LF.
+			"Exec=$exec_str".$LF.
+			"Type=Application".$LF.
+			"StartupNotify=true";
 		my $app = File::DesktopEntry->new(\$desktop_entry);
-		$app->exec($filepath);
+		$app->run($filepath);
+		main_quit();
 	}
 }
 sub dblclk_list
@@ -398,10 +406,13 @@ sub set_list_app_items
 			}
 		}
 		
-		push @$data, [$pxb, '<big>' . pango_escape($appname) . '</big>', '<small>' . $app->get('Exec') . '</small>'];
+		push @$data, [$pxb, 
+			'<big>' . pango_escape($appname) . '</big>', 
+			'<small>' . $app->get('Exec') . '</small>'];
 	}
 	$slist->select(0);
-	push @$data, [Gtk2::Button->new->render_icon('gtk-add', 'button'), '<big>' . "Custom application..." . '</big>'];
+	push @$data, [Gtk2::Button->new->render_icon('gtk-add', 'button'), 
+		'<big>' . "Custom application..." . '</big>'];
 }
 
 sub filter_apps
