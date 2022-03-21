@@ -297,8 +297,8 @@ sub btnclk_open
 		my $selected_app = $apps[$app_n];
 		if(defined $selected_app)
 		{
-			$selected_app->run($filepath);
-			main_quit();
+			$selected_app->exec($filepath);
+			can_not_run_error();
 		}
 		else
 		{
@@ -313,11 +313,8 @@ sub btnclk_open
 			$dlg->destroy();
 			if(defined $exe)
 			{
-				# TODO: quit gtk thread cleanly
 				exec($exe, $filepath);
-				$dlg = new Gtk2::MessageDialog($window, 'modal', 'error', 'close', "Can not run it.");
-				$dlg->run();
-				$dlg->destroy();
+				can_not_run_error();
 			}
 		}
 	}
@@ -331,9 +328,18 @@ sub btnclk_open
 			"Type=Application".$LF.
 			"StartupNotify=true";
 		my $app = File::DesktopEntry->new(\$desktop_entry);
-		$app->run($filepath);
-		main_quit();
+		$app->exec($filepath);
+		can_not_run_error();
 	}
+}
+
+sub can_not_run_error
+{
+	# TODO FIXME: "exec" calls before this sub cut gtk threads.
+	$dlg = new Gtk2::MessageDialog($window, 'modal', 'error', 'close', "Can not run it.");
+	$dlg->run();
+	$dlg->destroy();
+	main_quit();
 }
 
 sub dblclk_list
