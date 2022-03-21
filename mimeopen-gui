@@ -461,7 +461,11 @@ sub set_list_app_items
 			}
 			if(defined $iconpath)
 			{
-				$pxb = Gtk2::Gdk::Pixbuf->new_from_file_at_scale($iconpath, $pref_size, -1, TRUE);
+				eval {
+					$pxb = Gtk2::Gdk::Pixbuf->new_from_file_at_scale($iconpath, $pref_size, -1, TRUE);
+					1;
+				}
+				or $pxb = undef;
 			}
 		}
 		
