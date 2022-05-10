@@ -150,6 +150,7 @@ $window->signal_connect('destroy' => \&main_quit);
 $window->signal_connect('delete-event' => \&main_quit);
 add_key_binding($window, 'Escape', \&main_quit);
 add_key_binding($window, 'Return', \&btnclk_open);
+add_key_binding($window, 'KP_Enter', \&btnclk_open);
 $window->set_focus($slist);
 
 $input_cmd->signal_connect('changed', \&custom_cmd_changed);
