@@ -24,6 +24,26 @@ $win_w = 300;
 $win_h = 300;
 
 
+
+sub list_of_system_commands
+{
+	my %commands;
+	for my $dir (split /:/, $ENV{'PATH'})
+	{
+		for my $file (glob "$dir/*")
+		{
+			if(-x $file)
+			{
+				$file =~ /\/([^\/]+)$/;
+				my $name = $1;
+				$commands{$name}=1;
+			}
+		}
+	}
+	return keys %commands;
+}
+
+
 ## MIME Apps
 $uri = decode('utf8', $ARGV[0]);
 $mime_type = undef;
@@ -115,6 +135,7 @@ $scrwin = new Gtk2::ScrolledWindow();
 $slist = new Gtk2::SimpleList('icon'=>'pixbuf', 'label'=>'markup', 'is_default'=>'bool');
 $slist_default_app_checkbox_colum_index = 2;
 $input_cmd = new Gtk2::Entry();
+$input_cmd_autocompletion = new Gtk2::EntryCompletion();
 $btn_open = Gtk2::Button->new_from_stock('gtk-open');
 $btn_cncl = Gtk2::Button->new_from_stock('gtk-cancel');
 $btn_pref = Gtk2::Button->new_from_stock('gtk-preferences');
@@ -153,6 +174,7 @@ add_key_binding($window, 'Return', \&btnclk_open);
 add_key_binding($window, 'KP_Enter', \&btnclk_open);
 $window->set_focus($slist);
 
+$input_cmd->set_completion($input_cmd_autocompletion);
 $input_cmd->signal_connect('changed', \&custom_cmd_changed);
 
 $lbl1scr->set_policy('never', 'never');
@@ -205,6 +227,16 @@ set_stock_button_label($btn_pref, '');
 $btn_pref->set_tooltip_text("open config file to edit MIME type - Application assignments");
 $btn_pref->signal_connect('clicked' => \&btnclk_edit);
 
+{
+	# fill input_cmd_autocompletion
+	my $store = Gtk2::ListStore->new(Glib::String::);
+	for my $cmd (list_of_system_commands())
+	{
+		$store->set($store->append, 0, $cmd);
+	}
+	$input_cmd_autocompletion->set_model($store);
+	$input_cmd_autocompletion->set_text_column(0);
+}
 
 
 ## Begin
