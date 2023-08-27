@@ -47,10 +47,12 @@ sub list_of_system_commands
 ## MIME Apps
 $uri = decode('utf8', $ARGV[0]);
 $mime_type = undef;
+
 if(not defined $uri)
 {
-	die "Usage: $0 [<File | URI>]\n";
+	die "Usage: $0 [<File> | <URI>]\n";
 }
+
 if($uri =~ /^([[:alnum:]\+\.-]+):/)
 {
 	$mime_type = "x-scheme-handler/$1";
@@ -96,8 +98,8 @@ else
 		}
 		else
 		{
-			$mime_type = File::MimeInfo::mimetype($filepath);
 			$mime_type = magic($filepath) if not $mime_type;
+			$mime_type = File::MimeInfo::mimetype($filepath) if not $mime_type;
 			$mime_type = File::MimeInfo::default($filepath) if not $mime_type;
 		}
     }
