@@ -19,6 +19,7 @@ $LF = "\n";
 
 $MIMEOPEN_COMMAND = $0;
 $0 = "mimeopen-gui";
+$main_window_title = "Select application to open with...";
 $screen = Gtk2::Gdk::Screen->get_default;
 $win_w = 300;
 $win_h = 300;
@@ -62,11 +63,7 @@ else
 	$filepath = $uri;
 	if(!-e $filepath)
 	{
-		$dlg = new Gtk2::MessageDialog(undef, 'modal', 'error', 'close', "File does not exist.");
-		$dlg->set_title("File does not exist");
-		$dlg->format_secondary_text($filepath);
-		$dlg->run();
-		$dlg->destroy();
+		error_message("File does not exist.", $filepath);
 		exit 1;
 	}
 	elsif($xattr_available)
@@ -165,7 +162,7 @@ $cntr3->pack_start($btn_pref, FALSE, FALSE, 0);
 
 
 ## Setup Widgets
-$window->set_title("Select application to open with...");
+$window->set_title($main_window_title);
 $window->set_default_size($win_w, $win_h);
 $window->move(($screen->get_width()-$win_w)/2, ($screen->get_height()-$win_h)/2);
 
@@ -241,6 +238,26 @@ $btn_pref->signal_connect('clicked' => \&btnclk_edit);
 }
 
 
+$custom_command_input_changed_signal_lock = 0;
+$app_selection_changed_signal_lock = 0;
+$EXIT_STATUS = 0;
+$CHILD_PID = $CHILD_APPNAME = undef;
+
+$SIG{'CHLD'} = sub {
+	if(defined $CHILD_PID)
+	{
+		waitpid($CHILD_PID, 0);
+		my $wstatus = $?;
+		my $status = $wstatus >> 8;
+		my $signal = $wstatus & 127;
+		if($status != 0 or $signal != 0) { error_message(sprintf("Could not run %s.", $CHILD_APPNAME), "error $status, signal $signal"); }
+		$EXIT_STATUS = $status;
+		$EXIT_STATUS = 128 + $signal if $signal;
+		main_quit();
+	}
+};
+
+
 ## Begin
 $window->show_all();
 if($canonical_mime_type eq $mime_type)
@@ -248,13 +265,20 @@ if($canonical_mime_type eq $mime_type)
 	$lbl3scr->hide;
 }
 Gtk2->main();
-0;
+exit($EXIT_STATUS);
 
 
 ## Subroutines
 
-$custom_command_input_changed_signal_lock = 0;
-$app_selection_changed_signal_lock = 0;
+sub error_message
+{
+	my ($msg, $msg2) = @_;
+	my $dlg = new Gtk2::MessageDialog($window, 'modal', 'error', 'close', $msg);
+	$dlg->set_title($main_window_title);
+	$dlg->format_secondary_text($msg2) if defined $msg2;
+	$dlg->run();
+	$dlg->destroy();
+}
 
 sub custom_cmd_changed
 {
@@ -324,6 +348,38 @@ sub toggle_default_app_checkbox
 	}
 }
 
+sub try_run
+{
+	my ($selected_app, $exe, $filepath) = @_;
+	my $pid = fork;
+
+	if(not defined $pid)
+	{
+		error_message("Can not fork.");
+	}
+	elsif($pid == 0)
+	{
+		if(defined $selected_app) {
+			$CHILD_APPNAME = $selected_app->get('Name');
+			$selected_app->exec($filepath);
+		} else {
+			$CHILD_APPNAME = basename($exe);
+			exec($exe, $filepath);
+		}
+		exit 127;
+	}
+	else
+	{
+		$CHILD_PID = $pid;
+		if(defined $selected_app) {
+			$CHILD_APPNAME = $selected_app->get('Name');
+		} else {
+			$CHILD_APPNAME = basename($exe);
+		}
+		$window->hide();
+	}
+}
+
 sub btnclk_open
 {
 	my ($app_n) = $slist->get_selected_indices();
@@ -332,8 +388,7 @@ sub btnclk_open
 		my $selected_app = $apps[$app_n];
 		if(defined $selected_app)
 		{
-			$selected_app->exec($filepath);
-			can_not_run_error();
+			try_run($selected_app, undef, $filepath)
 		}
 		else
 		{
@@ -348,33 +403,23 @@ sub btnclk_open
 			$dlg->destroy();
 			if(defined $exe)
 			{
-				exec($exe, $filepath);
-				can_not_run_error();
+				try_run(undef, $exe, $filepath);
 			}
 		}
 	}
 	else
 	{
 		my $exec_str = $input_cmd->get_text;
+		my $basename = (split /\/+/, (split /\s+/, $exec_str)[0])[-1];
 		my $desktop_entry = 
 			"[Desktop Entry]".$LF.
-			"Name=mimeopen-gui custom command".$LF.
+			"Name=$basename - mimeopen-gui custom command".$LF.
 			"Exec=$exec_str".$LF.
 			"Type=Application".$LF.
 			"StartupNotify=true";
 		my $app = File::DesktopEntry->new(\$desktop_entry);
-		$app->exec($filepath);
-		can_not_run_error();
+		try_run($app, undef, $filepath);
 	}
-}
-
-sub can_not_run_error
-{
-	# TODO FIXME: "exec" calls before this sub cut gtk threads.
-	$dlg = new Gtk2::MessageDialog($window, 'modal', 'error', 'close', "Can not run it.");
-	$dlg->run();
-	$dlg->destroy();
-	main_quit();
 }
 
 sub dblclk_list
