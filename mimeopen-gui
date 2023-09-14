@@ -51,7 +51,7 @@ $mime_type = undef;
 
 if(not defined $uri)
 {
-	die "Usage: $0 [<File> | <URI>]\n";
+	die "Usage: $0 [<File(s)> | <URI(s)>]\n";
 }
 
 if($uri =~ /^([[:alnum:]\+\.-]+):/)
@@ -240,20 +240,16 @@ $btn_pref->signal_connect('clicked' => \&btnclk_edit);
 
 $custom_command_input_changed_signal_lock = 0;
 $app_selection_changed_signal_lock = 0;
+$CHILD = {};
 $EXIT_STATUS = 0;
-$CHILD_PID = $CHILD_APPNAME = undef;
 
+use POSIX ":sys_wait_h";
 $SIG{'CHLD'} = sub {
-	if(defined $CHILD_PID)
+	my $pid = waitpid(-1, WNOHANG);
+	my $wstatus = $?;
+	if(exists $CHILD->{$pid})
 	{
-		waitpid($CHILD_PID, 0);
-		my $wstatus = $?;
-		my $status = $wstatus >> 8;
-		my $signal = $wstatus & 127;
-		if($status != 0 or $signal != 0) { error_message(sprintf("Could not run %s.", $CHILD_APPNAME), "error $status, signal $signal"); }
-		$EXIT_STATUS = $status;
-		$EXIT_STATUS = 128 + $signal if $signal;
-		main_quit();
+		$CHILD->{$pid}->{'status'} = $wstatus;
 	}
 };
 
@@ -356,28 +352,62 @@ sub try_run
 	if(not defined $pid)
 	{
 		error_message("Can not fork.");
+		exit 12;
 	}
 	elsif($pid == 0)
 	{
 		if(defined $selected_app) {
-			$CHILD_APPNAME = $selected_app->get('Name');
 			$selected_app->exec($filepath);
 		} else {
-			$CHILD_APPNAME = basename($exe);
 			exec($exe, $filepath);
 		}
 		exit 127;
 	}
 	else
 	{
-		$CHILD_PID = $pid;
+		$CHILD->{$pid} = {};
 		if(defined $selected_app) {
-			$CHILD_APPNAME = $selected_app->get('Name');
+			$CHILD->{$pid}->{'appname'} = $selected_app->get('Name');
 		} else {
-			$CHILD_APPNAME = basename($exe);
+			$CHILD->{$pid}->{'appname'} = basename($exe);
 		}
-		$window->hide();
 	}
+}
+
+sub try_run_multi
+{
+	my ($selected_app, $exe, @paths) = @_;
+	for my $filepath (@paths)
+	{
+		try_run($selected_app, $exe, $filepath);
+	}
+	$window->hide();
+	Glib::Timeout->add(300, \&check_children);
+}
+
+sub check_children
+{
+	for my $pid (keys %$CHILD)
+	{
+		if(exists $CHILD->{$pid}->{'status'})
+		{
+			my $wstatus = $CHILD->{$pid}->{'status'};
+			my $status = $wstatus & 127;
+			my $signal = $wstatus >> 8;
+			if($status != 0 or $signal != 0)
+			{
+				error_message(sprintf("Could not run %s.", $CHILD->{$pid}->{'appname'}), "error $status, signal $signal");
+			}
+			delete $CHILD->{$pid};
+			my $xstatus = $signal ? 128 + $signal : $status;
+			$EXIT_STATUS = $xstatus if $xstatus > $EXIT_STATUS;
+		}
+	}
+	if(not %$CHILD)
+	{
+		main_quit();
+	}
+	1;  # keep running
 }
 
 sub btnclk_open
@@ -388,7 +418,7 @@ sub btnclk_open
 		my $selected_app = $apps[$app_n];
 		if(defined $selected_app)
 		{
-			try_run($selected_app, undef, $filepath)
+			try_run_multi($selected_app, undef, @ARGV)
 		}
 		else
 		{
@@ -403,7 +433,7 @@ sub btnclk_open
 			$dlg->destroy();
 			if(defined $exe)
 			{
-				try_run(undef, $exe, $filepath);
+				try_run_multi(undef, $exe, @ARGV);
 			}
 		}
 	}
@@ -418,7 +448,7 @@ sub btnclk_open
 			"Type=Application".$LF.
 			"StartupNotify=true";
 		my $app = File::DesktopEntry->new(\$desktop_entry);
-		try_run($app, undef, $filepath);
+		try_run_multi($app, undef, @ARGV);
 	}
 }
 
