@@ -11,6 +11,7 @@ use File::DesktopEntry;
 use Glib qw/TRUE FALSE/;
 use Gtk2 qw/-init/;
 use Gtk2::SimpleList;
+use utf8;
 eval q{ use Linux::UserXAttr ':all'; };
 $xattr_available = $@ ? 0 : 1;
 $LF = "\n";
@@ -23,28 +24,8 @@ $main_window_title = "Select application to open with...";
 $screen = Gtk2::Gdk::Screen->get_default;
 $win_w = 300;
 $win_h = 300;
-
-
-
-sub list_of_system_commands
-{
-	my %commands;
-	for my $dir (split /:/, $ENV{'PATH'})
-	{
-		for my $file (glob "$dir/*")
-		{
-			if(-x $file)
-			{
-				$file =~ /\/([^\/]+)$/;
-				my $name = $1;
-				$commands{$name}=1;
-			}
-		}
-	}
-	return keys %commands;
-}
-
 $usagetext = "Usage: $0 [<File(s)> | <URI>]\n";
+
 
 @Files = map { decode('utf8', $_); } @ARGV;
 
@@ -53,72 +34,97 @@ if(not @Files)
 	die $usagetext;
 }
 
-$mime_type = undef;
+if(scalar @Files > 1)
+{
+	$line_height_approx = 20;
+	$win_h += scalar @Files * $line_height_approx;
+}
+
+%mime_types = ();
 
 if($Files[0] =~ /^([[:alnum:]\+\.-]+):/)
 {
 	if(scalar @Files > 1) { die $usagetext; }
 	$uri = $Files[0];
-	$mime_type = "x-scheme-handler/$1";
+	$mime_types{"x-scheme-handler/$1"} = 1;
 }
 else
 {
-	# TODO support multi files here
-	$filepath = $Files[0];
-	
-	if($xattr_available)
+	for my $filepath (@Files)
 	{
-		$mime_type = getxattr($filepath, 'user.mime_type');
+		my $mime_type;
+		if($xattr_available)
+		{
+			$mime_type = getxattr($filepath, 'user.mime_type');
+		}
+		
+		if(not defined $mime_type)
+		{
+			if(-d $filepath)
+			{
+				$mime_type = "inode/directory";
+			}
+			elsif(-p $filepath)
+			{
+				$mime_type = "inode/fifo";
+			}
+			elsif(-S $filepath)
+			{
+				$mime_type = "inode/socket";
+			}
+			elsif(-c $filepath)
+			{
+				$mime_type = "inode/chardevice";
+			}
+			elsif(-b $filepath)
+			{
+				$mime_type = "inode/blockdevice";
+			}
+			else
+			{
+				$mime_type = magic($filepath) if not $mime_type;
+				$mime_type = File::MimeInfo::mimetype($filepath) if not $mime_type;
+				$mime_type = File::MimeInfo::default($filepath) if not $mime_type;
+			}
+		}
+		
+		$mime_types{$mime_type} = 1;
+		
+		my ($extension) = $filepath =~ /\.([^.]+)$/;
+		if($extension)
+		{
+			my $mime_type_by_ext = File::MimeInfo::mimetype('*.'.$extension);
+			$mime_types{$mime_type_by_ext} = 1 if $mime_type_by_ext;
+		}
 	}
-	
-	if(not defined $mime_type)
-	{
-		if(-d $filepath)
-		{
-			$mime_type = "inode/directory";
-		}
-		elsif(-p $filepath)
-		{
-			$mime_type = "inode/fifo";
-		}
-		elsif(-S $filepath)
-		{
-			$mime_type = "inode/socket";
-		}
-		elsif(-c $filepath)
-		{
-			$mime_type = "inode/chardevice";
-		}
-		elsif(-b $filepath)
-		{
-			$mime_type = "inode/blockdevice";
-		}
-		else
-		{
-			$mime_type = magic($filepath) if not $mime_type;
-			$mime_type = File::MimeInfo::mimetype($filepath) if not $mime_type;
-			$mime_type = File::MimeInfo::default($filepath) if not $mime_type;
-		}
-    }
-    
-	($extension) = $filepath =~ /\.([^.]+)$/;
-	$mime_type_by_ext = File::MimeInfo::mimetype('*.'.$extension) if $extension;
 }
 
-# TODO load apps for mimetype guessed by extension
+@mime_types = keys %mime_types;
 
-$canonical_mime_type = mimetype_canon $mime_type;
-%seen = ();
 
-@all_canonical_apps = mime_applications_all($mime_type);
-map {$_->{'mime_type'} = $canonical_mime_type if defined $_} @all_canonical_apps;
-@default_nonaliased_apps = File::MimeInfo::Applications::_default($mime_type);
-@other_nonaliased_apps = File::MimeInfo::Applications::_others($mime_type);
-map {$_->{'mime_type'} = $mime_type if defined $_} @default_nonaliased_apps, @other_nonaliased_apps;
+@all_default_apps = ();
+@all_canonical_apps = ();
+@all_other_nonaliased_apps = ();
 
-@default_apps = ($all_canonical_apps[0], @default_nonaliased_apps);
-map {$_->{'is_default_app'} = 1 if defined $_} @default_apps;
-@apps = grep {&filter_apps} @default_apps, @all_canonical_apps, @other_nonaliased_apps;
+for my $mime_type (@mime_types)
+{
+	my $canon_mime_type = mimetype_canon $mime_type;
+	my @canonical_apps = mime_applications_all($mime_type);
+	map {$_->{'mime_type'} = $canon_mime_type if defined $_} @canonical_apps;
+	push @all_canonical_apps, @canonical_apps;
+	
+	my @default_nonaliased_apps = File::MimeInfo::Applications::_default($mime_type);
+	my @other_nonaliased_apps = File::MimeInfo::Applications::_others($mime_type);
+	map {$_->{'mime_type'} = $mime_type if defined $_} @default_nonaliased_apps, @other_nonaliased_apps;
+	push @all_other_nonaliased_apps, @other_nonaliased_apps;
+	
+	my @default_apps = ($canonical_apps[0], @default_nonaliased_apps);
+	map {$_->{'is_default_app'} = 1 if defined $_} @default_apps;
+	push @all_default_apps, @default_apps;
+}
+
+%FilterApps_Seen = ();
+@apps = grep {&filter_apps} @all_default_apps, @all_canonical_apps, @all_other_nonaliased_apps;
 
 
 
@@ -192,17 +198,44 @@ $lbl1scr->set_size_request($win_w - 5, -1);
 $lbl2scr->set_size_request($win_w - 5, -1);
 $lbl3scr->set_size_request($win_w - 5, -1);
 
-if(defined $filepath)
-{
-	$lbl1->set_markup(sprintf("File: <b>%s</b>", Glib::Markup::escape_text(basename($filepath))));
-	$lbl1->set_tooltip_text(Glib::Markup::escape_text($filepath));
-}
-else
+if(defined $uri)
 {
 	$lbl1->set_markup(sprintf("URL: <b>%s</b>", Glib::Markup::escape_text($uri)));
 }
-$lbl2->set_markup(sprintf("MIME type: <i>%s</i>", Glib::Markup::escape_text($mime_type)));
-$lbl3->set_markup(sprintf("Canonical MIME type: <i>%s</i>", Glib::Markup::escape_text($canonical_mime_type)));
+else
+{
+	if(scalar @Files > 1)
+	{
+		my $label_markup = "Files:";
+		for my $filepath (@Files)
+		{
+			$label_markup .= sprintf("\n• <b>%s</b>", Glib::Markup::escape_text(basename($filepath)));
+		}
+		$lbl1->set_markup($label_markup);
+		my $tooltip = join "\n", map { Glib::Markup::escape_text($_); } @Files;
+		$lbl1->set_tooltip_text(Glib::Markup::escape_text($tooltip));
+	}
+	else
+	{
+		$lbl1->set_markup(sprintf("File: <b>%s</b>", Glib::Markup::escape_text(basename($Files[0]))));
+		$lbl1->set_tooltip_text(Glib::Markup::escape_text($Files[0]));
+	}
+}
+
+if(scalar @mime_types == 1)
+{
+	$lbl2->set_markup(sprintf("MIME type: <i>%s</i>", Glib::Markup::escape_text($mime_types[0])));
+	my $canon_mime_type = mimetype_canon $mime_types[0];
+	if($mime_types[0] ne $canon_mime_type)
+	{
+		$lbl3->set_markup(sprintf("Canonical MIME type: <i>%s</i>", Glib::Markup::escape_text($canon_mime_type)));
+	}
+}
+else
+{
+	my %types_detected = map { $_ => 1 } @mime_types, map { mimetype_canon $_ } @mime_types;
+	$lbl2->set_markup("MIME types detected: " . join ", ", map { sprintf "<i>%s</i>", Glib::Markup::escape_text($_) } keys %types_detected);
+}
 
 $lbl1->set_alignment(0, 0);
 $lbl2->set_alignment(0, 0);
@@ -262,15 +295,30 @@ $SIG{'CHLD'} = sub {
 
 ## Begin
 $window->show_all();
-if($canonical_mime_type eq $mime_type)
-{
-	$lbl3scr->hide;
-}
+if($lbl3->get_text eq '') { $lbl3scr->hide; }
 Gtk2->main();
 exit($EXIT_STATUS);
 
 
 ## Subroutines
+
+sub list_of_system_commands
+{
+	my %commands;
+	for my $dir (split /:/, $ENV{'PATH'})
+	{
+		for my $file (glob "$dir/*")
+		{
+			if(-x $file)
+			{
+				$file =~ /\/([^\/]+)$/;
+				my $name = $1;
+				$commands{$name}=1;
+			}
+		}
+	}
+	return keys %commands;
+}
 
 sub error_message
 {
@@ -604,9 +652,9 @@ sub filter_apps
 	my $a = $_;
 	return 0 if !defined $a;
 	my $x = $a->get('Exec');
-	my $had_seen = $seen{$x};
-	$seen{$x} = 1;
-	return !$had_seen;
+	my $seen = $FilterApps_Seen{$x};
+	$FilterApps_Seen{$x} = 1;
+	return !$seen;
 }
 
 sub scroll_viewport
