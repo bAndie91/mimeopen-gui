@@ -44,29 +44,29 @@ sub list_of_system_commands
 	return keys %commands;
 }
 
+$usagetext = "Usage: $0 [<File(s)> | <URI>]\n";
 
-## MIME Apps
-$uri = decode('utf8', $ARGV[0]);
-$mime_type = undef;
+@Files = map { decode('utf8', $_); } @ARGV;
 
-if(not defined $uri)
+if(not @Files)
 {
-	die "Usage: $0 [<File(s)> | <URI(s)>]\n";
+	die $usagetext;
 }
 
-if($uri =~ /^([[:alnum:]\+\.-]+):/)
+$mime_type = undef;
+
+if($Files[0] =~ /^([[:alnum:]\+\.-]+):/)
 {
+	if(scalar @Files > 1) { die $usagetext; }
+	$uri = $Files[0];
 	$mime_type = "x-scheme-handler/$1";
 }
 else
 {
-	$filepath = $uri;
-	if(!-e $filepath)
-	{
-		error_message("File does not exist.", $filepath);
-		exit 1;
-	}
-	elsif($xattr_available)
+	# TODO support multi files here
+	$filepath = $Files[0];
+	
+	if($xattr_available)
 	{
 		$mime_type = getxattr($filepath, 'user.mime_type');
 	}
@@ -100,10 +100,16 @@ else
 			$mime_type = File::MimeInfo::default($filepath) if not $mime_type;
 		}
     }
+    
+	($extension) = $filepath =~ /\.([^.]+)$/;
+	$mime_type_by_ext = File::MimeInfo::mimetype('*.'.$extension) if $extension;
 }
+
+# TODO load apps for mimetype guessed by extension
 
 $canonical_mime_type = mimetype_canon $mime_type;
 %seen = ();
+
 @all_canonical_apps = mime_applications_all($mime_type);
 map {$_->{'mime_type'} = $canonical_mime_type if defined $_} @all_canonical_apps;
 @default_nonaliased_apps = File::MimeInfo::Applications::_default($mime_type);
@@ -418,7 +424,7 @@ sub btnclk_open
 		my $selected_app = $apps[$app_n];
 		if(defined $selected_app)
 		{
-			try_run_multi($selected_app, undef, @ARGV)
+			try_run_multi($selected_app, undef, @Files)
 		}
 		else
 		{
@@ -433,7 +439,7 @@ sub btnclk_open
 			$dlg->destroy();
 			if(defined $exe)
 			{
-				try_run_multi(undef, $exe, @ARGV);
+				try_run_multi(undef, $exe, @Files);
 			}
 		}
 	}
@@ -448,7 +454,7 @@ sub btnclk_open
 			"Type=Application".$LF.
 			"StartupNotify=true";
 		my $app = File::DesktopEntry->new(\$desktop_entry);
-		try_run_multi($app, undef, @ARGV);
+		try_run_multi($app, undef, @Files);
 	}
 }
 
