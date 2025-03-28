@@ -4,13 +4,14 @@ EXEC_PREFIX = $(PREFIX)/bin
 default:
 	@echo maybe interested in: make install
 	false
+.PHONY: default
 
-perl-gtk2:
-	# test is Gtk2 module is installed
-	perl -MGtk2 -e ''
-.PHONY: perl-gtk2
+dependencies:
+	# test if dependent perl modules are installed
+	perl -c mimeopen-gui
+.PHONY: dependencies
 
-install: perl-gtk2
+install: dependencies
 	cp -v --no-preserve=ownership mimeopen-gui $(EXEC_PREFIX)
 	cp -v --no-preserve=ownership mimeopen-gui.desktop $(PREFIX)/share/applications/
 	update-desktop-database

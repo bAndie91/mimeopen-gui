@@ -14,6 +14,8 @@ use Gtk2::SimpleList;
 use utf8;
 eval q{ use Linux::UserXAttr ':all'; };
 $xattr_available = $@ ? 0 : 1;
+use Config::Backend::INI;
+use File::XDG;
 $LF = "\n";
 
 
@@ -21,9 +23,12 @@ $LF = "\n";
 $MIMEOPEN_COMMAND = $0;
 $0 = "mimeopen-gui";
 $main_window_title = "Select application to open with...";
-$screen = Gtk2::Gdk::Screen->get_default;
-$win_w = 300;
-$win_h = 300;
+$Screen = Gtk2::Gdk::Screen->get_default;
+$xdg = File::XDG->new( name => 'mimeopen-gui', api => 1 );
+mkdir $xdg->config_home if ! -d $xdg->config_home;
+$Config = new Config::Backend::INI($xdg->config_home . '/ui.ini');
+$win_w = $Config->get('window.width') || 300;
+$win_h = $Config->get('window.height') || 300;
 $usagetext = "Usage: $0 [<File(s)> | <URI>]\n";
 
 
@@ -176,10 +181,11 @@ $cntr3->pack_start($btn_pref, FALSE, FALSE, 0);
 ## Setup Widgets
 $window->set_title($main_window_title);
 $window->set_default_size($win_w, $win_h);
-$window->move(($screen->get_width()-$win_w)/2, ($screen->get_height()-$win_h)/2);
+$window->move(($Screen->get_width()-$win_w)/2, ($Screen->get_height()-$win_h)/2);
 
 $window->signal_connect('destroy' => \&main_quit);
 $window->signal_connect('delete-event' => \&main_quit);
+$window->signal_connect('configure-event' => \&main_window_configure);
 add_key_binding($window, 'Escape', \&main_quit);
 add_key_binding($window, 'Return', \&btnclk_open);
 add_key_binding($window, 'KP_Enter', \&btnclk_open);
@@ -194,9 +200,9 @@ $lbl3scr->set_policy('never', 'never');
 $lbl1scr->get_children->set_shadow_type('none');
 $lbl2scr->get_children->set_shadow_type('none');
 $lbl3scr->get_children->set_shadow_type('none');
-$lbl1scr->set_size_request($win_w - 5, -1);
-$lbl2scr->set_size_request($win_w - 5, -1);
-$lbl3scr->set_size_request($win_w - 5, -1);
+$lbl1scr->set_size_request(295, -1);
+$lbl2scr->set_size_request(295, -1);
+$lbl3scr->set_size_request(295, -1);
 
 if(defined $uri)
 {
@@ -668,4 +674,12 @@ sub scroll_viewport
 	my $width = $self->get_allocation->width;
 	$new = $adj->upper - $width if $new + $width > $adj->upper;
 	$adj->set_value($new);
+}
+
+sub main_window_configure
+{
+	my ($widget, $event) = @_;
+	$Config->set('window.width', $event->width);
+	$Config->set('window.height', $event->height);
+	return '';
 }
