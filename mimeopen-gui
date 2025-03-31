@@ -226,11 +226,7 @@ else
 	if(scalar @Files > 1)
 	{
 		$lbl1a->set_text("Files:");
-		my $label_markup = '';
-		for my $filepath (@Files)
-		{
-			$label_markup .= sprintf("\n• <b>%s</b>", Glib::Markup::escape_text(basename($filepath)));
-		}
+		my $label_markup = join "\n", map { sprintf("• <b>%s</b>", Glib::Markup::escape_text(basename($_))); } @Files;
 		$lbl1b->set_markup($label_markup);
 		my $tooltip = join "\n", map { Glib::Markup::escape_text($_); } @Files;
 		$lbl1b->set_tooltip_text(Glib::Markup::escape_text($tooltip));
