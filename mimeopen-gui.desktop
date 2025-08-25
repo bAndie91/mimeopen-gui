@@ -1,8 +1,0 @@
-[Desktop Entry]
-Version=1.0
-Terminal=false
-Exec=mimeopen-gui %f
-Type=Application
-Categories=GTK;Application;Utility;
-Name=MIME Application Chooser
-MimeType=inode/*;application/*;text/*;video/*;image/*;audio/*;message/*;multipart/*;model/*;x-content/*;
