@@ -260,6 +260,8 @@ set_list_app_items($slist, @apps);
 $checkbox_column = $slist->get_column($slist_default_app_checkbox_colum_index);
 $toggle_cell_renderer = $checkbox_column->get_cell_renderers;
 $toggle_cell_renderer->signal_connect('toggled', \&toggle_default_app_checkbox);
+# setting default app makes sense for a single MIME type only
+$checkbox_column->set_visible(FALSE) if scalar @mime_types > 1;
 
 
 $btn_open->signal_connect('clicked' => \&btnclk_open);
