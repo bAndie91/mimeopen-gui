@@ -8,6 +8,7 @@ use File::MimeInfo qw/mimetype_canon/;
 use File::MimeInfo::Applications;
 use File::MimeInfo::Magic qw/magic/;
 use File::Basename qw/basename dirname/;
+use File::BaseDir ();
 use File::DesktopEntry;
 use File::Spec;
 use Glib qw/TRUE FALSE/;
@@ -131,14 +132,24 @@ for my $mime_type (@mime_types)
 	push @all_other_nonaliased_apps, @other_nonaliased_apps;
 	
 	my @default_apps = ($canonical_apps[0], @default_nonaliased_apps);
+	if(scalar @mime_types == 1)
+	{
+		# the library knows only one default app, but there can be more of them in the preferences
+		@default_apps = grep {defined} map {find_desktop_entry($_)} default_app_names($mime_type, $canon_mime_type);
+		map {$_->{'mime_type'} = $canon_mime_type} @default_apps;
+		$default_mime_type = $canon_mime_type;
+		$raw_mime_type = $mime_type;
+	}
 	map {$_->{'is_default_app'} = 1 if defined $_} @default_apps;
 	push @all_default_apps, @default_apps;
 	
-	map {$App_Mime_Types{$_->get('Exec')}{$mime_type} = 1 if defined $_} @canonical_apps, @default_nonaliased_apps, @other_nonaliased_apps;
+	map {$App_Mime_Types{$_->get('Exec')}{$mime_type} = 1 if defined $_} @canonical_apps, @default_apps, @default_nonaliased_apps, @other_nonaliased_apps;
 }
 
 %FilterApps_Seen = ();
 @apps = grep {&filter_apps} @all_default_apps, @all_canonical_apps, @all_other_nonaliased_apps;
+# default apps as they are currently set in the preferences, most preferred first
+@current_default_names = map {basename($_->{'file'})} grep {$_->{'is_default_app'}} @apps;
 
 
 
@@ -166,8 +177,9 @@ $basename_row = LabelRow->new();
 $mime_type_row = LabelRow->new();
 $canon_mime_type_row = LabelRow->new();
 $scrwin = new Gtk2::ScrolledWindow();
-$slist = new Gtk2::SimpleList('icon'=>'pixbuf', 'label'=>'markup', 'is_default'=>'bool');
+$slist = new Gtk2::SimpleList('icon'=>'pixbuf', 'label'=>'markup', 'is_default'=>'bool', 'app_index'=>'hidden');
 $slist_default_app_checkbox_colum_index = 2;
+$slist_app_index_colum_index = 3;
 $input_cmd = new Gtk2::Entry();
 $input_cmd_autocompletion = new Gtk2::EntryCompletion();
 $btn_open = Gtk2::Button->new_from_stock('gtk-open');
@@ -256,6 +268,13 @@ $slist->set_rules_hint(TRUE);
 $slist->get_selection->signal_connect('changed', \&click_list);
 $slist->signal_connect('row-activated', \&dblclk_list);
 set_list_app_items($slist, @apps);
+if(scalar @mime_types == 1)
+{
+	# order of the rows is the order of the default apps (for the ticked ones)
+	$slist->set_reorderable(TRUE);
+	# a drag-and-drop move is an insertion of the new row, then a deletion of the old one
+	$slist->get_model->signal_connect('row-deleted', \&list_rows_reordered);
+}
 
 $checkbox_column = $slist->get_column($slist_default_app_checkbox_colum_index);
 $toggle_cell_renderer = $checkbox_column->get_cell_renderers;
@@ -351,7 +370,7 @@ sub click_list
 	return 1 if $app_selection_changed_signal_lock;
 	
 	my ($app_n) = $slist->get_selected_indices();
-	my $selected_app = $apps[$app_n];
+	my $selected_app = app_at($app_n);
 	if(defined $selected_app)
 	{
 		my $exec_str = $selected_app->get('Exec');
@@ -362,40 +381,132 @@ sub click_list
 	return 1;
 }
 
+sub app_at
+{
+	# application of a list row, regardless of the order of the rows
+	my ($slist_index) = @_;
+	return undef if not defined $slist_index;
+	my $row = $slist->{'data'}->[$slist_index];
+	return undef if not defined $row;
+	my $app_n = $row->[$slist_app_index_colum_index];
+	return $app_n >= 0 ? $apps[$app_n] : undef;
+}
+
+sub find_desktop_entry
+{
+	my ($desktop_file_name) = @_;
+	my $file = File::BaseDir::data_files('applications', $desktop_file_name);
+	return $file ? File::DesktopEntry->new($file) : undef;
+}
+
+sub default_app_names
+{
+	# desktop file names set as default for the mime type, most preferred first
+	my @mime_types = @_;
+	my @paths = grep {defined $_ and -f $_ and -r _} (
+		File::BaseDir::config_home('mimeapps.list'),
+		File::BaseDir::config_dirs('mimeapps.list'),
+		File::BaseDir::data_home('applications', 'mimeapps.list'),
+		File::BaseDir::data_dirs('applications', 'mimeapps.list'),
+		File::BaseDir::data_home('applications', 'defaults.list'),
+	);
+	return () if not @paths;
+	my (%seen_mime_type, %seen_name);
+	return grep {!$seen_name{$_}++} map {File::MimeInfo::Applications::_read_list($_, @paths)} grep {!$seen_mime_type{$_}++} @mime_types;
+}
+
+sub remove_user_default_apps
+{
+	# the library has no way to drop a mime type from the user's mimeapps.list
+	my ($mime_type) = @_;
+	my $file = File::BaseDir::config_home('mimeapps.list');
+	return if not -f $file;
+	open my $fh, '<', $file or die "Could not read file: $file\n";
+	my @lines = <$fh>;
+	close $fh;
+	my @kept = grep {!/^\Q$mime_type\E=/} @lines;
+	return if scalar @kept == scalar @lines;
+	open $fh, '>', $file or die "Could not write file: $file\n";
+	print $fh @kept;
+	close $fh or die "Could not write file: $file\n";
+}
+
+sub set_user_default_apps
+{
+	my ($mime_type, @desktop_file_names) = @_;
+	if(@desktop_file_names)
+	{
+		# the library takes the name of a .desktop file and saves it as is: a list goes the same way
+		mime_applications_set_default($mime_type, join(';', @desktop_file_names));
+	}
+	else
+	{
+		remove_user_default_apps($mime_type);
+	}
+}
+
+sub save_default_apps
+{
+	# save the ticked applications in the order of the rows, top is the most preferred
+	my @names = ();
+	for my $slist_index (0 .. $#{$slist->{'data'}})
+	{
+		next if not $slist->{'data'}->[$slist_index]->[$slist_default_app_checkbox_colum_index];
+		my $app = app_at($slist_index);
+		next if not defined $app;
+		my $name = basename($app->{'file'});
+		push @names, $name if not grep {$_ eq $name} @names;
+	}
+	# reordering of unticked apps changes nothing
+	return if join(';', @names) eq join(';', @current_default_names);
+	
+	my @mime_types_to_set = ($default_mime_type);
+	if($raw_mime_type ne $default_mime_type)
+	{
+		# keep the alias in sync if it has its own setting
+		my @alias_names = eval { File::MimeInfo::Applications::_read_list($raw_mime_type, File::BaseDir::config_home('mimeapps.list')) };
+		push @mime_types_to_set, $raw_mime_type if @alias_names;
+	}
+	set_user_default_apps($_, @names) for @mime_types_to_set;
+	@current_default_names = @names;
+}
+
+sub list_rows_reordered
+{
+	return if $list_reorder_pending;
+	$list_reorder_pending = 1;
+	# let the drag-and-drop finish (insertion of the new row and deletion of the old one)
+	Glib::Idle->add(sub {
+		$list_reorder_pending = 0;
+		
+		# the row of the custom application is always the last one
+		my $model = $slist->get_model;
+		my $last = $#{$slist->{'data'}};
+		for my $slist_index (0 .. $last - 1)
+		{
+			if($slist->{'data'}->[$slist_index]->[$slist_app_index_colum_index] < 0)
+			{
+				$model->move_before($model->get_iter(Gtk2::TreePath->new($slist_index)), undef);
+				last;
+			}
+		}
+		
+		eval { save_default_apps(); 1 } or warn $@;
+		return FALSE;
+	});
+	return 1;
+}
+
 sub toggle_default_app_checkbox
 {
 	my ($cellrenderer, $slist_index) = @_;
 	my $is_ticked = $slist->{'data'}->[$slist_index]->[$slist_default_app_checkbox_colum_index];
 	my $done = 0;
-	if($slist_index < scalar @apps)
+	if(defined app_at($slist_index) and defined $default_mime_type)
 	{
-		my $selected_app = $apps[$slist_index];
-		my $mime_type = $selected_app->{'mime_type'};
-		
-		if($is_ticked)
-		{
-			eval { mime_applications_set_default($mime_type => $selected_app); 1 };
-			$done = !$@;
-		}
-		else
-		{
-			eval { File::MimeInfo::Applications::_write_list($mime_type => ''); 1 };
-			$done = !$@;
-		}
-		
-		if($done)
-		{
-			if($is_ticked)
-			{
-				# untick all other applistions checkboxes (of the same mime type)
-				for my $row_index (0 .. $#{$slist->{'data'}})
-				{
-					next if $row_index == $slist_index;
-					next if $row_index < scalar @apps and $apps[$row_index]->{'mime_type'} ne $mime_type;
-					$slist->{'data'}->[$row_index]->[$slist_default_app_checkbox_colum_index] = FALSE;
-				}
-			}
-		}
+		eval { save_default_apps(); 1 };
+		$done = !$@;
+		warn $@ if $@;
 	}
 	if(!$done)
 	{
@@ -474,7 +585,7 @@ sub btnclk_open
 	my ($app_n) = $slist->get_selected_indices();
 	if(defined $app_n)
 	{
-		my $selected_app = $apps[$app_n];
+		my $selected_app = app_at($app_n);
 		if(defined $selected_app)
 		{
 			try_run_multi($selected_app, undef, @Files)
@@ -667,11 +778,11 @@ sub set_list_app_items
 		}
 		
 		$select_index_by_default = $index if not defined $select_index_by_default and $app->{'is_default_app'};
-		push @$slist_data, [$pxb, sprintf("<big>%s</big>\n<small>%s</small>", pango_escape($appname), pango_escape($app->get('Exec'))), $app->{'is_default_app'} ? TRUE : FALSE];
+		push @$slist_data, [$pxb, sprintf("<big>%s</big>\n<small>%s</small>", pango_escape($appname), pango_escape($app->get('Exec'))), $app->{'is_default_app'} ? TRUE : FALSE, $index];
 	}
 	
 	$slist->select($select_index_by_default || 0);
-	push @$slist_data, [Gtk2::Button->new->render_icon('gtk-add', 'button'), '<big>'."Custom application...".'</big>', FALSE];
+	push @$slist_data, [Gtk2::Button->new->render_icon('gtk-add', 'button'), '<big>'."Custom application...".'</big>', FALSE, -1];
 }
 
 sub filter_apps
