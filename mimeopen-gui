@@ -1,5 +1,6 @@
 #!/usr/bin/env perl
 
+use POSIX ":sys_wait_h";
 use Encode qw/encode decode/;
 use Data::Dumper;
 use File::MimeInfo;
@@ -134,6 +135,17 @@ for my $mime_type (@mime_types)
 
 
 
+
+sub pango_bold
+{
+	return sprintf("<b>%s</b>", Glib::Markup::escape_text($_[0]));
+}
+sub pango_italic
+{
+	return sprintf("<i>%s</i>", Glib::Markup::escape_text($_[0]));
+}
+
+
 ## Create Widgets
 $window = new Gtk2::Window('toplevel');
 $cntr0v = new Gtk2::VBox();
@@ -142,18 +154,10 @@ $cntr1 = new Gtk2::VBox();
 #$cntr2 = new Gtk2::HBox();
 $cntr3 = new Gtk2::HBox();
 $cntr3a = new Gtk2::HBox();
-$lblbox1 = new Gtk2::HBox();
-$lblbox2 = new Gtk2::HBox();
-$lblbox3 = new Gtk2::HBox();
-$lbl1scr = new Gtk2::ScrolledWindow();
-$lbl2scr = new Gtk2::ScrolledWindow();
-$lbl3scr = new Gtk2::ScrolledWindow();
-$label_basename_intro = new Gtk2::Label();
-$label_basename = new Gtk2::Label();
-$label_mime_type_intro = new Gtk2::Label();
-$label_mime_type = new Gtk2::Label();
-$label_canon_mime_type_intro = new Gtk2::Label();
-$label_canon_mime_type = new Gtk2::Label();
+$directory_row = LabelRow->new();
+$basename_row = LabelRow->new();
+$mime_type_row = LabelRow->new();
+$canon_mime_type_row = LabelRow->new();
 $scrwin = new Gtk2::ScrolledWindow();
 $slist = new Gtk2::SimpleList('icon'=>'pixbuf', 'label'=>'markup', 'is_default'=>'bool');
 $slist_default_app_checkbox_colum_index = 2;
@@ -168,18 +172,9 @@ $btn_edit = Gtk2::Button->new_from_stock('gtk-edit');
 $window->add($cntr0v);
 $cntr0v->pack_start($cntr0h, TRUE, TRUE, 4);
 $cntr0h->pack_start($cntr1, TRUE, TRUE, 4);
-$cntr1->pack_start($lblbox1, FALSE, TRUE, 0);
-$lblbox1->pack_start($label_basename_intro, FALSE, TRUE, 0);
-$lblbox1->pack_start($lbl1scr, TRUE, TRUE, 0);
-$lbl1scr->add_with_viewport($label_basename);
-$cntr1->pack_start($lblbox2, FALSE, TRUE, 0);
-$lblbox2->pack_start($label_mime_type_intro, FALSE, TRUE, 0);
-$lblbox2->pack_start($lbl2scr, TRUE, TRUE, 0);
-$lbl2scr->add_with_viewport($label_mime_type);
-$cntr1->pack_start($lblbox3, FALSE, TRUE, 0);
-$lblbox3->pack_start($label_canon_mime_type_intro, FALSE, TRUE, 0);
-$lblbox3->pack_start($lbl3scr, TRUE, TRUE, 0);
-$lbl3scr->add_with_viewport($label_canon_mime_type);
+$cntr1->pack_start($basename_row->container, FALSE, TRUE, 0);
+$cntr1->pack_start($mime_type_row->container, FALSE, TRUE, 0);
+$cntr1->pack_start($canon_mime_type_row->container, FALSE, TRUE, 0);
 $cntr1->pack_start($scrwin, TRUE, TRUE, 0);
 $cntr1->pack_start($input_cmd, FALSE, TRUE, 0);
 #$cntr1->pack_start($cntr2, FALSE, TRUE, 0);
@@ -207,69 +202,37 @@ $window->set_focus($slist);
 $input_cmd->set_completion($input_cmd_autocompletion);
 $input_cmd->signal_connect('changed', \&custom_cmd_changed);
 
-$lbl1scr->set_policy('never', 'never');
-$lbl2scr->set_policy('never', 'never');
-$lbl3scr->set_policy('never', 'never');
-$lbl1scr->get_children->set_shadow_type('none');
-$lbl2scr->get_children->set_shadow_type('none');
-$lbl3scr->get_children->set_shadow_type('none');
-$lbl1scr->set_size_request(295, -1);
-$lbl2scr->set_size_request(295, -1);
-$lbl3scr->set_size_request(295, -1);
-
 if(defined $uri)
 {
-	$label_basename_intro->set_text("URL:");
-	$label_basename->set_markup(sprintf("<b>%s</b>", Glib::Markup::escape_text($uri)));
+	$basename_row->intro_text("URL:");
+	$basename_row->label_markup(pango_bold($uri));
 }
 else
 {
-	if(scalar @Files > 1)
-	{
-		$label_basename_intro->set_text("Files:");
-		my $label_markup = join "\n", map { sprintf("• <b>%s</b>", Glib::Markup::escape_text(basename($_))); } @Files;
-		$label_basename->set_markup($label_markup);
-		my $tooltip = join "\n", map { Glib::Markup::escape_text($_); } @Files;
-		$label_basename->set_tooltip_text(Glib::Markup::escape_text($tooltip));
-	}
-	else
-	{
-		$label_basename_intro->set_text("File:");
-		$label_basename->set_markup(sprintf("<b>%s</b>", Glib::Markup::escape_text(basename($Files[0]))));
-		$label_basename->set_tooltip_text(Glib::Markup::escape_text($Files[0]));
-	}
+	$basename_row->intro_text(sprintf "File%s:", scalar(@Files) > 1 ? 's' : '');
+	my $label_markup = join "\n", map { (scalar(@Files) > 1 ? "• " : "") . pango_bold(basename($_)); } @Files;
+	$basename_row->label_markup($label_markup);
+	my $tooltip = join "\n", map { Glib::Markup::escape_text($_); } @Files;
+	$basename_row->label->set_tooltip_text($tooltip);
 }
 
 if(scalar @mime_types == 1)
 {
-	$label_mime_type_intro->set_text("MIME type:");
-	$label_mime_type->set_markup(sprintf("<i>%s</i>", Glib::Markup::escape_text($mime_types[0])));
+	$mime_type_row->intro_text("MIME type:");
+	$mime_type_row->label_markup(pango_italic($mime_types[0]));
 	my $canon_mime_type = mimetype_canon $mime_types[0];
 	if($mime_types[0] ne $canon_mime_type)
 	{
-		$label_canon_mime_type_intro->set_text("Canonical MIME type:");
-		$label_canon_mime_type->set_markup(sprintf("<i>%s</i>", Glib::Markup::escape_text($canon_mime_type)));
+		$canon_mime_type_row->intro_text("Canonical MIME type:");
+		$canon_mime_type_row->label_markup(pango_italic($canon_mime_type));
 	}
 }
 else
 {
 	my %types_detected = map { $_ => 1 } @mime_types, map { mimetype_canon $_ } @mime_types;
-	$label_mime_type_intro->set_text("MIME types detected:");
-	$label_mime_type->set_markup(join ", ", map { sprintf "<i>%s</i>", Glib::Markup::escape_text($_) } keys %types_detected);
+	$mime_type_row->intro_text("MIME types detected:");
+	$mime_type_row->label_markup(join ", ", map { pango_italic($_) } keys %types_detected);
 }
-
-$label_basename_intro->set_alignment(0, 0);
-$label_basename->set_alignment(0, 0);
-$label_mime_type_intro->set_alignment(0, 0);
-$label_mime_type->set_alignment(0, 0);
-$label_canon_mime_type_intro->set_alignment(0, 0);
-$label_canon_mime_type->set_alignment(0, 0);
-$label_basename->set_selectable(TRUE);
-$label_mime_type->set_selectable(TRUE);
-$label_canon_mime_type->set_selectable(TRUE);
-$lbl1scr->get_children->signal_connect('scroll-event' => \&scroll_viewport);
-$lbl2scr->get_children->signal_connect('scroll-event' => \&scroll_viewport);
-$lbl3scr->get_children->signal_connect('scroll-event' => \&scroll_viewport);
 
 $scrwin->set_policy('automatic', 'automatic');
 $slist->set_headers_visible(FALSE);
@@ -306,7 +269,6 @@ $app_selection_changed_signal_lock = 0;
 $CHILD = {};
 $EXIT_STATUS = 0;
 
-use POSIX ":sys_wait_h";
 $SIG{'CHLD'} = sub {
 	my $pid = waitpid(-1, WNOHANG);
 	my $wstatus = $?;
@@ -319,7 +281,7 @@ $SIG{'CHLD'} = sub {
 
 ## Begin
 $window->show_all();
-if($label_canon_mime_type->get_text eq '') { $lblbox3->hide; }
+if($canon_mime_type_row->label->get_text eq '') { $canon_mime_type_row->container->hide; }
 Gtk2->main();
 exit($EXIT_STATUS);
 
@@ -703,6 +665,51 @@ sub filter_apps
 	return !$seen;
 }
 
+
+sub main_window_configure
+{
+	my ($widget, $event) = @_;
+	$Config->set('window.width', $event->width);
+	$Config->set('window.height', $event->height);
+	return '';
+}
+
+
+package LabelRow;
+
+sub new {
+	my ($class) = @_;
+	my $self = bless {
+		container => new Gtk2::HBox(),
+		intro => new Gtk2::Label(),
+		scroller => new Gtk2::ScrolledWindow(),
+		label => new Gtk2::Label(),
+	}, $class;
+	$self->init();
+	return $self;
+}
+
+sub init {
+	my ($self) = @_;
+	$self->{intro}->set_alignment(0, 0);
+	$self->{label}->set_alignment(0, 0);
+	$self->{label}->set_selectable(TRUE);
+	$self->{scroller}->set_policy('never', 'never');
+	$self->{scroller}->add_with_viewport($self->{label});
+	$self->{container}->pack_start($self->{intro}, FALSE, TRUE, 0);
+	$self->{container}->pack_start($self->{scroller}, TRUE, TRUE, 0);
+	$self->{scroller}->get_children->set_shadow_type('none');
+	$self->{scroller}->set_size_request(295, -1);
+	$self->{scroller}->get_children->signal_connect('scroll-event' => \&scroll_viewport);
+}
+
+sub container { return $_[0]->{container}; }
+sub intro { return $_[0]->{intro}; }
+sub label { return $_[0]->{label}; }
+sub intro_text { return defined $_[1] ? $_[0]->intro->set_text($_[1]) : $_[0]->intro->get_text; }
+sub label_text { return defined $_[1] ? $_[0]->label->set_text($_[1]) : $_[0]->label->get_text; }
+sub label_markup { return defined $_[1] ? $_[0]->label->set_markup($_[1]) : $_[0]->label->get_markup; }
+
 sub scroll_viewport
 {
 	my ($self, $event) = @_;
@@ -714,12 +721,4 @@ sub scroll_viewport
 	my $width = $self->get_allocation->width;
 	$new = $adj->upper - $width if $new + $width > $adj->upper;
 	$adj->set_value($new);
-}
-
-sub main_window_configure
-{
-	my ($widget, $event) = @_;
-	$Config->set('window.width', $event->width);
-	$Config->set('window.height', $event->height);
-	return '';
 }
