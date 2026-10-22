@@ -48,12 +48,14 @@ if(scalar @Files > 1)
 }
 
 %mime_types = ();
+%file_mime_types = ();
 
 if($Files[0] =~ /^([[:alnum:]\+\.-]+):/)
 {
 	if(scalar @Files > 1) { die $usagetext; }
 	$uri = $Files[0];
 	$mime_types{"x-scheme-handler/$1"} = 1;
+	$file_mime_types{$uri}{"x-scheme-handler/$1"} = 1;
 }
 else
 {
@@ -96,12 +98,14 @@ else
 		}
 		
 		$mime_types{$mime_type} = 1 if defined $mime_type;
+		$file_mime_types{$filepath}{$mime_type} = 1 if defined $mime_type;
 		
 		my ($extension) = $filepath =~ /\.([^.]+)$/;
 		if($extension)
 		{
 			my $mime_type_by_ext = File::MimeInfo::mimetype('*.'.$extension);
 			$mime_types{$mime_type_by_ext} = 1 if $mime_type_by_ext;
+			$file_mime_types{$filepath}{$mime_type_by_ext} = 1 if $mime_type_by_ext;
 		}
 	}
 }
@@ -112,6 +116,7 @@ else
 @all_default_apps = ();
 @all_canonical_apps = ();
 @all_other_nonaliased_apps = ();
+%App_Mime_Types = ();
 
 for my $mime_type (@mime_types)
 {
@@ -128,6 +133,8 @@ for my $mime_type (@mime_types)
 	my @default_apps = ($canonical_apps[0], @default_nonaliased_apps);
 	map {$_->{'is_default_app'} = 1 if defined $_} @default_apps;
 	push @all_default_apps, @default_apps;
+	
+	map {$App_Mime_Types{$_->get('Exec')}{$mime_type} = 1 if defined $_} @canonical_apps, @default_nonaliased_apps, @other_nonaliased_apps;
 }
 
 %FilterApps_Seen = ();
@@ -670,6 +677,13 @@ sub filter_apps
 	my $a = $_;
 	return 0 if !defined $a;
 	my $x = $a->get('Exec');
+	# keep only apps which can open all the files (intersection, not union)
+	for my $filepath (@Files)
+	{
+		my @file_mime_types = keys %{$file_mime_types{$filepath} || {}};
+		next if not @file_mime_types;
+		return 0 if not grep {$App_Mime_Types{$x}{$_}} @file_mime_types;
+	}
 	my $seen = $FilterApps_Seen{$x};
 	$FilterApps_Seen{$x} = 1;
 	return !$seen;
