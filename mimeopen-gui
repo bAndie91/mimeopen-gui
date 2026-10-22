@@ -6,8 +6,9 @@ use File::MimeInfo;
 use File::MimeInfo qw/mimetype_canon/;
 use File::MimeInfo::Applications;
 use File::MimeInfo::Magic qw/magic/;
-use File::Basename qw/basename/;
+use File::Basename qw/basename dirname/;
 use File::DesktopEntry;
+use File::Spec;
 use Glib qw/TRUE FALSE/;
 use Gtk2 qw/-init/;
 use Gtk2::SimpleList;
@@ -160,7 +161,7 @@ $input_cmd = new Gtk2::Entry();
 $input_cmd_autocompletion = new Gtk2::EntryCompletion();
 $btn_open = Gtk2::Button->new_from_stock('gtk-open');
 $btn_cncl = Gtk2::Button->new_from_stock('gtk-cancel');
-$btn_pref = Gtk2::Button->new_from_stock('gtk-preferences');
+$btn_edit = Gtk2::Button->new_from_stock('gtk-edit');
 
 
 ## Pack Widgets
@@ -187,7 +188,7 @@ $scrwin->add($slist);
 $cntr3->pack_start($cntr3a, TRUE, TRUE, 0);
 $cntr3a->pack_start($btn_open, TRUE, FALSE, 0);
 $cntr3a->pack_start($btn_cncl, TRUE, FALSE, 0);
-$cntr3->pack_start($btn_pref, FALSE, FALSE, 0);
+$cntr3->pack_start($btn_edit, FALSE, FALSE, 0);
 
 
 ## Setup Widgets
@@ -284,9 +285,9 @@ $toggle_cell_renderer->signal_connect('toggled', \&toggle_default_app_checkbox);
 
 $btn_open->signal_connect('clicked' => \&btnclk_open);
 $btn_cncl->signal_connect('clicked' => \&main_quit);
-set_stock_button_label($btn_pref, '');
-$btn_pref->set_tooltip_text("open config file to edit MIME type - Application assignments");
-$btn_pref->signal_connect('clicked' => \&btnclk_edit);
+set_stock_button_label($btn_edit, '');
+$btn_edit->set_tooltip_text("Open Application Assignments config file(s)");
+$btn_edit->signal_connect('clicked' => \&btnclk_edit);
 
 {
 	# fill input_cmd_autocompletion
@@ -535,10 +536,32 @@ sub dblclk_list
 	btnclk_open();
 }
 
+sub app_dirs {
+	return map { File::Spec->catdir($_, 'applications') } dirname($xdg->data_home), $xdg->data_dirs_list;
+}
+
+sub existing_mimeapps_files {
+	my @desktops = map { lc } grep { length } split /:/, ($ENV{XDG_CURRENT_DESKTOP} // '');
+	my @dirs = (
+		dirname($xdg->config_home), $xdg->config_dirs_list,
+		app_dirs(),
+	);
+	my @out;
+	for my $d (@dirs) {
+		for my $desktop (@desktops) {
+			my $f = "$d/$desktop-mimeapps.list";
+			push @out, $f if -f $f;
+		}
+		my $f = "$d/mimeapps.list";
+		push @out, $f if -f $f;
+	}
+	return @out;
+}
+
 sub btnclk_edit
 {
-	$ENV{'MIMEOPEN_COMMAND'} = $MIMEOPEN_COMMAND;
-	system('sh', '-c', 'command $MIMEOPEN_COMMAND $HOME/.local/share/applications/defaults.list &');
+	my (@files) = existing_mimeapps_files();
+	try_run_multi(undef, $MIMEOPEN_COMMAND, @files);
 	main_quit();
 }
 
