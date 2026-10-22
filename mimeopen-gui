@@ -172,6 +172,7 @@ $btn_edit = Gtk2::Button->new_from_stock('gtk-edit');
 $window->add($cntr0v);
 $cntr0v->pack_start($cntr0h, TRUE, TRUE, 4);
 $cntr0h->pack_start($cntr1, TRUE, TRUE, 4);
+$cntr1->pack_start($directory_row->container, FALSE, TRUE, 0);
 $cntr1->pack_start($basename_row->container, FALSE, TRUE, 0);
 $cntr1->pack_start($mime_type_row->container, FALSE, TRUE, 0);
 $cntr1->pack_start($canon_mime_type_row->container, FALSE, TRUE, 0);
@@ -209,6 +210,14 @@ if(defined $uri)
 }
 else
 {
+	my %dirs = map {dirname($_)=>1} grep {/^\// and ! -d} @Files;
+	if(scalar keys %dirs == 1)
+	{
+		$directory_row->intro_text("Directory:");
+		my ($dir) = keys %dirs;
+		$dir =~ s/^$ENV{HOME}\//~\//;
+		$directory_row->label_markup(pango_bold($dir));
+	}
 	$basename_row->intro_text(sprintf "File%s:", scalar(@Files) > 1 ? 's' : '');
 	my $label_markup = join "\n", map { (scalar(@Files) > 1 ? "• " : "") . pango_bold(basename($_)); } @Files;
 	$basename_row->label_markup($label_markup);
@@ -281,6 +290,7 @@ $SIG{'CHLD'} = sub {
 
 ## Begin
 $window->show_all();
+if($directory_row->label->get_text eq '') { $directory_row->container->hide; }
 if($canon_mime_type_row->label->get_text eq '') { $canon_mime_type_row->container->hide; }
 Gtk2->main();
 exit($EXIT_STATUS);
