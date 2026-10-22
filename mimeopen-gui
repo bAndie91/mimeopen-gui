@@ -148,12 +148,12 @@ $lblbox3 = new Gtk2::HBox();
 $lbl1scr = new Gtk2::ScrolledWindow();
 $lbl2scr = new Gtk2::ScrolledWindow();
 $lbl3scr = new Gtk2::ScrolledWindow();
-$lbl1a = new Gtk2::Label();
-$lbl1b = new Gtk2::Label();
-$lbl2a = new Gtk2::Label();
-$lbl2b = new Gtk2::Label();
-$lbl3a = new Gtk2::Label();
-$lbl3b = new Gtk2::Label();
+$label_basename_intro = new Gtk2::Label();
+$label_basename = new Gtk2::Label();
+$label_mime_type_intro = new Gtk2::Label();
+$label_mime_type = new Gtk2::Label();
+$label_canon_mime_type_intro = new Gtk2::Label();
+$label_canon_mime_type = new Gtk2::Label();
 $scrwin = new Gtk2::ScrolledWindow();
 $slist = new Gtk2::SimpleList('icon'=>'pixbuf', 'label'=>'markup', 'is_default'=>'bool');
 $slist_default_app_checkbox_colum_index = 2;
@@ -169,17 +169,17 @@ $window->add($cntr0v);
 $cntr0v->pack_start($cntr0h, TRUE, TRUE, 4);
 $cntr0h->pack_start($cntr1, TRUE, TRUE, 4);
 $cntr1->pack_start($lblbox1, FALSE, TRUE, 0);
-$lblbox1->pack_start($lbl1a, FALSE, TRUE, 0);
+$lblbox1->pack_start($label_basename_intro, FALSE, TRUE, 0);
 $lblbox1->pack_start($lbl1scr, TRUE, TRUE, 0);
-$lbl1scr->add_with_viewport($lbl1b);
+$lbl1scr->add_with_viewport($label_basename);
 $cntr1->pack_start($lblbox2, FALSE, TRUE, 0);
-$lblbox2->pack_start($lbl2a, FALSE, TRUE, 0);
+$lblbox2->pack_start($label_mime_type_intro, FALSE, TRUE, 0);
 $lblbox2->pack_start($lbl2scr, TRUE, TRUE, 0);
-$lbl2scr->add_with_viewport($lbl2b);
+$lbl2scr->add_with_viewport($label_mime_type);
 $cntr1->pack_start($lblbox3, FALSE, TRUE, 0);
-$lblbox3->pack_start($lbl3a, FALSE, TRUE, 0);
+$lblbox3->pack_start($label_canon_mime_type_intro, FALSE, TRUE, 0);
 $lblbox3->pack_start($lbl3scr, TRUE, TRUE, 0);
-$lbl3scr->add_with_viewport($lbl3b);
+$lbl3scr->add_with_viewport($label_canon_mime_type);
 $cntr1->pack_start($scrwin, TRUE, TRUE, 0);
 $cntr1->pack_start($input_cmd, FALSE, TRUE, 0);
 #$cntr1->pack_start($cntr2, FALSE, TRUE, 0);
@@ -219,54 +219,54 @@ $lbl3scr->set_size_request(295, -1);
 
 if(defined $uri)
 {
-	$lbl1a->set_text("URL:");
-	$lbl1b->set_markup(sprintf("<b>%s</b>", Glib::Markup::escape_text($uri)));
+	$label_basename_intro->set_text("URL:");
+	$label_basename->set_markup(sprintf("<b>%s</b>", Glib::Markup::escape_text($uri)));
 }
 else
 {
 	if(scalar @Files > 1)
 	{
-		$lbl1a->set_text("Files:");
+		$label_basename_intro->set_text("Files:");
 		my $label_markup = join "\n", map { sprintf("• <b>%s</b>", Glib::Markup::escape_text(basename($_))); } @Files;
-		$lbl1b->set_markup($label_markup);
+		$label_basename->set_markup($label_markup);
 		my $tooltip = join "\n", map { Glib::Markup::escape_text($_); } @Files;
-		$lbl1b->set_tooltip_text(Glib::Markup::escape_text($tooltip));
+		$label_basename->set_tooltip_text(Glib::Markup::escape_text($tooltip));
 	}
 	else
 	{
-		$lbl1a->set_text("File:");
-		$lbl1b->set_markup(sprintf("<b>%s</b>", Glib::Markup::escape_text(basename($Files[0]))));
-		$lbl1b->set_tooltip_text(Glib::Markup::escape_text($Files[0]));
+		$label_basename_intro->set_text("File:");
+		$label_basename->set_markup(sprintf("<b>%s</b>", Glib::Markup::escape_text(basename($Files[0]))));
+		$label_basename->set_tooltip_text(Glib::Markup::escape_text($Files[0]));
 	}
 }
 
 if(scalar @mime_types == 1)
 {
-	$lbl2a->set_text("MIME type:");
-	$lbl2b->set_markup(sprintf("<i>%s</i>", Glib::Markup::escape_text($mime_types[0])));
+	$label_mime_type_intro->set_text("MIME type:");
+	$label_mime_type->set_markup(sprintf("<i>%s</i>", Glib::Markup::escape_text($mime_types[0])));
 	my $canon_mime_type = mimetype_canon $mime_types[0];
 	if($mime_types[0] ne $canon_mime_type)
 	{
-		$lbl3a->set_text("Canonical MIME type:");
-		$lbl3b->set_markup(sprintf("<i>%s</i>", Glib::Markup::escape_text($canon_mime_type)));
+		$label_canon_mime_type_intro->set_text("Canonical MIME type:");
+		$label_canon_mime_type->set_markup(sprintf("<i>%s</i>", Glib::Markup::escape_text($canon_mime_type)));
 	}
 }
 else
 {
 	my %types_detected = map { $_ => 1 } @mime_types, map { mimetype_canon $_ } @mime_types;
-	$lbl2a->set_text("MIME types detected:");
-	$lbl2b->set_markup(join ", ", map { sprintf "<i>%s</i>", Glib::Markup::escape_text($_) } keys %types_detected);
+	$label_mime_type_intro->set_text("MIME types detected:");
+	$label_mime_type->set_markup(join ", ", map { sprintf "<i>%s</i>", Glib::Markup::escape_text($_) } keys %types_detected);
 }
 
-$lbl1a->set_alignment(0, 0);
-$lbl1b->set_alignment(0, 0);
-$lbl2a->set_alignment(0, 0);
-$lbl2b->set_alignment(0, 0);
-$lbl3a->set_alignment(0, 0);
-$lbl3b->set_alignment(0, 0);
-$lbl1b->set_selectable(TRUE);
-$lbl2b->set_selectable(TRUE);
-$lbl3b->set_selectable(TRUE);
+$label_basename_intro->set_alignment(0, 0);
+$label_basename->set_alignment(0, 0);
+$label_mime_type_intro->set_alignment(0, 0);
+$label_mime_type->set_alignment(0, 0);
+$label_canon_mime_type_intro->set_alignment(0, 0);
+$label_canon_mime_type->set_alignment(0, 0);
+$label_basename->set_selectable(TRUE);
+$label_mime_type->set_selectable(TRUE);
+$label_canon_mime_type->set_selectable(TRUE);
 $lbl1scr->get_children->signal_connect('scroll-event' => \&scroll_viewport);
 $lbl2scr->get_children->signal_connect('scroll-event' => \&scroll_viewport);
 $lbl3scr->get_children->signal_connect('scroll-event' => \&scroll_viewport);
@@ -319,7 +319,7 @@ $SIG{'CHLD'} = sub {
 
 ## Begin
 $window->show_all();
-if($lbl3b->get_text eq '') { $lblbox3->hide; }
+if($label_canon_mime_type->get_text eq '') { $lblbox3->hide; }
 Gtk2->main();
 exit($EXIT_STATUS);
 
