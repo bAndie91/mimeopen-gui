@@ -48,6 +48,102 @@ if(scalar @Files > 1)
 	$win_h += scalar @Files * $line_height_approx;
 }
 
+# File::MimeInfo::Applications does not respect the sections of the mimeapps.list files:
+# it reads and writes the key in any section, and adds new lines to the end of the file.
+# Monkey-patch it to deal with the [Default Applications] section only (or [MIME Cache] of mimeinfo.cache),
+# and never touch the other sections, like [Added Associations].
+{
+	no warnings 'redefine';
+	
+	*File::MimeInfo::Applications::_read_list = sub {
+		# read list with "mime/type=foo.desktop;bar.desktop" format
+		my $mimetype = shift;
+		my @list;
+		my $succeeded;
+		for my $file (@_)
+		{
+			next if not defined $file;
+			open my $fh, '<', $file or next;
+			$succeeded = 1;
+			my @lines = <$fh>;
+			close $fh;
+			my $wanted_section = basename($file) eq 'mimeinfo.cache' ? 'MIME Cache' : 'Default Applications';
+			my $has_section = grep {/^\s*\[.*\]\s*$/} @lines;
+			my $section = undef;
+			for my $line (@lines)
+			{
+				if($line =~ /^\s*\[(.*?)\]\s*$/) { $section = $1; next; }
+				next if $has_section and (not defined $section or $section ne $wanted_section);
+				$line =~ /^\Q$mimetype\E\s*=\s*(.*?)\s*$/ or next;
+				push @list, grep {defined $_ and length $_} split ';', $1;
+			}
+		}
+		Carp::croak("Could not read any defaults, tried:\n" . join("\t\n", @_)) unless $succeeded;
+		return @list;
+	};
+	
+	*File::MimeInfo::Applications::_write_list = sub {
+		# set the list of a mime type, or remove the mime type if the value is undef;
+		# optional third argument is the file to write instead of the user's mimeapps.list
+		my ($mimetype, $value, $file) = @_;
+		$file = File::BaseDir::config_home('mimeapps.list') if not defined $file;
+		my @lines;
+		if(-f $file)
+		{
+			open my $fh, '<', $file or Carp::croak("Could not read file: $file");
+			@lines = <$fh>;
+			close $fh;
+			$lines[-1] .= "\n" if @lines and $lines[-1] !~ /\n\z/;
+		}
+		else
+		{
+			return if not defined $value;
+			File::MimeInfo::Applications::_mkdir($file);
+		}
+		
+		my $new_line = (defined $value and length $value) ? "$mimetype=$value;\n" : undef;
+		my ($section, @kept, $head_index, $end_index, $replaced);
+		for my $line (@lines)
+		{
+			if($line =~ /^\s*\[(.*?)\]\s*$/)
+			{
+				$end_index = scalar @kept if defined $head_index and not defined $end_index;
+				$section = $1;
+				push @kept, $line;
+				$head_index = $#kept if not defined $head_index and $section eq 'Default Applications';
+				next;
+			}
+			if(defined $section and $section eq 'Default Applications' and $line =~ /^\Q$mimetype\E\s*=/)
+			{
+				# replace in place, drop duplicates
+				push @kept, $new_line if defined $new_line and not $replaced;
+				$replaced = 1;
+				next;
+			}
+			push @kept, $line;
+		}
+		if(defined $new_line and not $replaced)
+		{
+			if(defined $head_index)
+			{
+				# to the end of the section, but before the blank lines which separate it from the next one
+				my $at = defined $end_index ? $end_index : scalar @kept;
+				$at-- while $at > $head_index + 1 and $kept[$at - 1] =~ /^\s*$/;
+				splice @kept, $at, 0, $new_line;
+			}
+			else
+			{
+				push @kept, "\n" if @kept and $kept[-1] !~ /^\s*$/;
+				push @kept, "[Default Applications]\n", $new_line;
+			}
+		}
+		
+		open my $fh, '>', $file or Carp::croak("Could not write file: $file");
+		print $fh @kept;
+		close $fh or Carp::croak("Could not write file: $file");
+	};
+}
+
 %mime_types = ();
 %file_mime_types = ();
 
@@ -135,10 +231,13 @@ for my $mime_type (@mime_types)
 	if(scalar @mime_types == 1)
 	{
 		# the library knows only one default app, but there can be more of them in the preferences
-		@default_apps = grep {defined} map {find_desktop_entry($_)} default_app_names($mime_type, $canon_mime_type);
-		map {$_->{'mime_type'} = $canon_mime_type} @default_apps;
 		$default_mime_type = $canon_mime_type;
-		$raw_mime_type = $mime_type;
+		@default_mime_keys = ($canon_mime_type);
+		push @default_mime_keys, $mime_type if $mime_type ne $canon_mime_type;
+		load_default_apps_config();
+		my %seen_default_name;
+		@default_apps = grep {defined} map {find_desktop_entry($_)} grep {!$seen_default_name{$_}++} (@user_default_names, @system_default_names);
+		map {$_->{'mime_type'} = $canon_mime_type} @default_apps;
 	}
 	map {$_->{'is_default_app'} = 1 if defined $_} @default_apps;
 	push @all_default_apps, @default_apps;
@@ -148,8 +247,6 @@ for my $mime_type (@mime_types)
 
 %FilterApps_Seen = ();
 @apps = grep {&filter_apps} @all_default_apps, @all_canonical_apps, @all_other_nonaliased_apps;
-# default apps as they are currently set in the preferences, most preferred first
-@current_default_names = map {basename($_->{'file'})} grep {$_->{'is_default_app'}} @apps;
 
 
 
@@ -177,9 +274,10 @@ $basename_row = LabelRow->new();
 $mime_type_row = LabelRow->new();
 $canon_mime_type_row = LabelRow->new();
 $scrwin = new Gtk2::ScrolledWindow();
-$slist = new Gtk2::SimpleList('icon'=>'pixbuf', 'label'=>'markup', 'is_default'=>'bool', 'app_index'=>'hidden');
+$slist = new Gtk2::SimpleList('icon'=>'pixbuf', 'label'=>'markup', 'is_default'=>'bool', 'is_default_system'=>'bool', 'app_index'=>'hidden');
 $slist_default_app_checkbox_colum_index = 2;
-$slist_app_index_colum_index = 3;
+$slist_system_default_app_checkbox_colum_index = 3;
+$slist_app_index_colum_index = 4;
 $input_cmd = new Gtk2::Entry();
 $input_cmd_autocompletion = new Gtk2::EntryCompletion();
 $btn_open = Gtk2::Button->new_from_stock('gtk-open');
@@ -277,10 +375,18 @@ if(scalar @mime_types == 1)
 }
 
 $checkbox_column = $slist->get_column($slist_default_app_checkbox_colum_index);
-$toggle_cell_renderer = $checkbox_column->get_cell_renderers;
-$toggle_cell_renderer->signal_connect('toggled', \&toggle_default_app_checkbox);
-# setting default app makes sense for a single MIME type only
-$checkbox_column->set_visible(FALSE) if scalar @mime_types > 1;
+$system_checkbox_column = $slist->get_column($slist_system_default_app_checkbox_colum_index);
+for my $checkbox_set ([$checkbox_column, 'user'], [$system_checkbox_column, 'system'])
+{
+	my ($column, $which) = @$checkbox_set;
+	my ($renderer) = $column->get_cell_renderers;
+	$renderer->signal_connect('toggled', \&toggle_default_app_checkbox, $which);
+	$column->set_cell_data_func($renderer, make_checkbox_cell_data_func($which));
+	# setting default app makes sense for a single MIME type only
+	$column->set_visible(FALSE) if scalar @mime_types > 1;
+}
+$slist->set_property('has-tooltip', TRUE);
+$slist->signal_connect('query-tooltip', \&list_tooltip);
 
 
 $btn_open->signal_connect('clicked' => \&btnclk_open);
@@ -399,76 +505,266 @@ sub find_desktop_entry
 	return $file ? File::DesktopEntry->new($file) : undef;
 }
 
-sub default_app_names
+sub env_dirs
 {
-	# desktop file names set as default for the mime type, most preferred first
-	my @mime_types = @_;
-	my @paths = grep {defined $_ and -f $_ and -r _} (
-		File::BaseDir::config_home('mimeapps.list'),
-		File::BaseDir::config_dirs('mimeapps.list'),
+	my ($var, $default) = @_;
+	my $value = $ENV{$var};
+	$value = $default if not defined $value or $value eq '';
+	return grep {length $_} split ':', $value;
+}
+
+sub user_mimeapps_file
+{
+	return File::BaseDir::config_home('mimeapps.list');
+}
+
+sub system_mimeapps_files
+{
+	# other than the user's one, the most precedent first, as the library reads them
+	my $user_file = user_mimeapps_file();
+	my @files = (
+		(map {File::Spec->catfile($_, 'mimeapps.list')} env_dirs('XDG_CONFIG_DIRS', '/etc/xdg')),
 		File::BaseDir::data_home('applications', 'mimeapps.list'),
-		File::BaseDir::data_dirs('applications', 'mimeapps.list'),
+		(map {File::Spec->catfile($_, 'applications', 'mimeapps.list')} env_dirs('XDG_DATA_DIRS', '/usr/local/share:/usr/share')),
 		File::BaseDir::data_home('applications', 'defaults.list'),
 	);
-	return () if not @paths;
-	my (%seen_mime_type, %seen_name);
-	return grep {!$seen_name{$_}++} map {File::MimeInfo::Applications::_read_list($_, @paths)} grep {!$seen_mime_type{$_}++} @mime_types;
+	my %seen = ($user_file => 1);
+	return grep {!$seen{$_}++} @files;
 }
 
-sub remove_user_default_apps
+sub system_target_file
 {
-	# the library has no way to drop a mime type from the user's mimeapps.list
-	my ($mime_type) = @_;
-	my $file = File::BaseDir::config_home('mimeapps.list');
-	return if not -f $file;
-	open my $fh, '<', $file or die "Could not read file: $file\n";
-	my @lines = <$fh>;
-	close $fh;
-	my @kept = grep {!/^\Q$mime_type\E=/} @lines;
-	return if scalar @kept == scalar @lines;
-	open $fh, '>', $file or die "Could not write file: $file\n";
-	print $fh @kept;
-	close $fh or die "Could not write file: $file\n";
-}
-
-sub set_user_default_apps
-{
-	my ($mime_type, @desktop_file_names) = @_;
-	if(@desktop_file_names)
+	# the system-wide file to set default apps in: the first writable one
+	my @files = (
+		(map {File::Spec->catfile($_, 'mimeapps.list')} env_dirs('XDG_CONFIG_DIRS', '/etc/xdg')),
+		(map {File::Spec->catfile($_, 'applications', 'mimeapps.list')} env_dirs('XDG_DATA_DIRS', '/usr/local/share:/usr/share')),
+	);
+	my $user_file = user_mimeapps_file();
+	for my $file (grep {$_ ne $user_file} @files)
 	{
-		# the library takes the name of a .desktop file and saves it as is: a list goes the same way
-		mime_applications_set_default($mime_type, join(';', @desktop_file_names));
+		return $file if path_writable($file);
+	}
+	return undef;
+}
+
+sub path_writable
+{
+	my ($path) = @_;
+	return -w $path if -e $path;
+	# the file could be created if its closest existing parent directory is writable
+	my $dir = dirname($path);
+	while(!-d $dir and dirname($dir) ne $dir) { $dir = dirname($dir); }
+	return (-d $dir and -w $dir and -x $dir) ? 1 : 0;
+}
+
+sub names_in_file
+{
+	# desktop file names set as default for the mime type keys in a file, most preferred first
+	my ($file, @mime_keys) = @_;
+	my %seen;
+	return grep {!$seen{$_}++} map {my @l = eval { File::MimeInfo::Applications::_read_list($_, $file) }; @l} @mime_keys;
+}
+
+sub load_default_apps_config
+{
+	@user_default_names = names_in_file(user_mimeapps_file(), @default_mime_keys);
+	@system_default_names = ();
+	%system_default_files = ();
+	for my $file (system_mimeapps_files())
+	{
+		for my $name (names_in_file($file, @default_mime_keys))
+		{
+			push @system_default_names, $name if not $system_default_files{$name};
+			push @{$system_default_files{$name}}, $file if not grep {$_ eq $file} @{$system_default_files{$name}};
+		}
+	}
+}
+
+sub set_default_names
+{
+	# set the default apps of a mime type in a file (the user's one by default); no apps removes the mime type
+	my ($file, $mime_type, @desktop_file_names) = @_;
+	if(not defined $file or $file eq user_mimeapps_file())
+	{
+		if(@desktop_file_names)
+		{
+			# the library takes the name of a .desktop file and saves it as is: a list goes the same way
+			mime_applications_set_default($mime_type, join(';', @desktop_file_names));
+		}
+		else
+		{
+			File::MimeInfo::Applications::_write_list($mime_type, undef);
+		}
 	}
 	else
 	{
-		remove_user_default_apps($mime_type);
+		# the library writes the user's file only
+		File::MimeInfo::Applications::_write_list($mime_type, @desktop_file_names ? join(';', @desktop_file_names) : undef, $file);
 	}
 }
 
-sub save_default_apps
+sub merge_default_list
+{
+	# ticked apps in the order of the list, while entries which are not on the list (eg. not installed apps) are kept where they were
+	my ($existing, $ticked, $known) = @_;
+	my @new = @$ticked;
+	for my $i (0 .. $#{$existing})
+	{
+		next if $known->{$existing->[$i]};
+		splice @new, ($i < scalar @new ? $i : scalar @new), 0, $existing->[$i];
+	}
+	return @new;
+}
+
+sub save_user_default_apps
 {
 	# save the ticked applications in the order of the rows, top is the most preferred
-	my @names = ();
+	my $file = user_mimeapps_file();
+	my @existing = names_in_file($file, @default_mime_keys);
+	my %known = map {(basename($_->{'file'}) => 1)} @apps;
+	my %seen;
+	my @ticked = ();
 	for my $slist_index (0 .. $#{$slist->{'data'}})
 	{
 		next if not $slist->{'data'}->[$slist_index]->[$slist_default_app_checkbox_colum_index];
 		my $app = app_at($slist_index);
 		next if not defined $app;
 		my $name = basename($app->{'file'});
-		push @names, $name if not grep {$_ eq $name} @names;
+		push @ticked, $name if not $seen{$name}++;
 	}
+	my @new = merge_default_list(\@existing, \@ticked, \%known);
 	# reordering of unticked apps changes nothing
-	return if join(';', @names) eq join(';', @current_default_names);
+	return if join(';', @new) eq join(';', @existing);
 	
-	my @mime_types_to_set = ($default_mime_type);
-	if($raw_mime_type ne $default_mime_type)
+	my @keys = ($default_mime_type);
+	# keep the alias in sync if it has its own setting
+	push @keys, grep {$_ ne $default_mime_type and names_in_file($file, $_)} @default_mime_keys;
+	set_default_names($file, $_, @new) for @keys;
+	load_default_apps_config();
+}
+
+sub save_system_default_app
+{
+	my ($slist_index, $ticked) = @_;
+	my $app = app_at($slist_index);
+	my $name = basename($app->{'file'});
+	if($ticked)
 	{
-		# keep the alias in sync if it has its own setting
-		my @alias_names = eval { File::MimeInfo::Applications::_read_list($raw_mime_type, File::BaseDir::config_home('mimeapps.list')) };
-		push @mime_types_to_set, $raw_mime_type if @alias_names;
+		my $file = system_target_file();
+		die "No writable system-wide settings file\n" if not defined $file;
+		my @names = names_in_file($file, $default_mime_type);
+		return if grep {$_ eq $name} @names;
+		# before the first app which is below this one in the list
+		my %row_of;
+		for my $i (0 .. $#{$slist->{'data'}})
+		{
+			my $row_app = app_at($i);
+			$row_of{basename($row_app->{'file'})} = $i if defined $row_app;
+		}
+		my $position = scalar @names;
+		for my $i (0 .. $#names)
+		{
+			if(defined $row_of{$names[$i]} and $row_of{$names[$i]} > $slist_index) { $position = $i; last; }
+		}
+		splice @names, $position, 0, $name;
+		set_default_names($file, $default_mime_type, @names);
 	}
-	set_user_default_apps($_, @names) for @mime_types_to_set;
-	@current_default_names = @names;
+	else
+	{
+		for my $file (@{$system_default_files{$name} || []})
+		{
+			die "Not writable: $file\n" if not path_writable($file);
+			for my $key (@default_mime_keys)
+			{
+				my @names = names_in_file($file, $key);
+				next if not grep {$_ eq $name} @names;
+				set_default_names($file, $key, grep {$_ ne $name} @names);
+			}
+		}
+	}
+	load_default_apps_config();
+}
+
+sub checkbox_editable
+{
+	my ($which, $app_n, $is_ticked) = @_;
+	return 0 if not defined $default_mime_type;
+	if($which eq 'user')
+	{
+		return path_writable(user_mimeapps_file()) ? 1 : 0;
+	}
+	if(not $is_ticked)
+	{
+		return defined system_target_file() ? 1 : 0;
+	}
+	my $name = basename($apps[$app_n]->{'file'});
+	my @files = @{$system_default_files{$name} || []};
+	return (@files and not grep {!path_writable($_)} @files) ? 1 : 0;
+}
+
+sub make_checkbox_cell_data_func
+{
+	my ($which) = @_;
+	my $ticked_colum_index = $which eq 'system' ? $slist_system_default_app_checkbox_colum_index : $slist_default_app_checkbox_colum_index;
+	return sub {
+		my ($column, $cell, $model, $iter) = @_;
+		my $app_n = $model->get($iter, $slist_app_index_colum_index);
+		if($app_n < 0)
+		{
+			# custom application row
+			$cell->set(visible => FALSE);
+			return;
+		}
+		my $editable = checkbox_editable($which, $app_n, $model->get($iter, $ticked_colum_index));
+		$cell->set(visible => TRUE, sensitive => $editable, activatable => $editable);
+	};
+}
+
+sub checkbox_tooltip_text
+{
+	my ($which, $app_n, $is_ticked) = @_;
+	my $app = $apps[$app_n];
+	return undef if not defined $app or not defined $default_mime_type;
+	my $name = basename($app->{'file'});
+	my $editable = checkbox_editable($which, $app_n, $is_ticked);
+	my $text;
+	if($which eq 'user')
+	{
+		my $file = user_mimeapps_file();
+		$text = ($is_ticked ? "Default opener in your settings" : "Set as default opener in your settings") . "\n" . $file;
+		$text .= "\n(you can not change it)" if not $editable;
+	}
+	elsif($is_ticked)
+	{
+		$text = "Default opener in system-wide settings\n" . join("\n", @{$system_default_files{$name} || []});
+		$text .= "\n(you can not change it)" if not $editable;
+	}
+	else
+	{
+		my $file = system_target_file();
+		$text = defined $file ? "Set as default opener in system-wide settings\n" . $file : "Not a default opener in system-wide settings\n(you can not change them)";
+	}
+	return $text;
+}
+
+sub list_tooltip
+{
+	my ($widget, $x, $y, $keyboard_mode, $tooltip) = @_;
+	return FALSE if $keyboard_mode;
+	my ($bin_x, $bin_y) = $slist->convert_widget_to_bin_window_coords($x, $y);
+	my ($path, $column) = $slist->get_path_at_pos($bin_x, $bin_y);
+	return FALSE if not defined $path or not defined $column;
+	my $which = {'is_default' => 'user', 'is_default_system' => 'system'}->{$column->get_title};
+	return FALSE if not defined $which;
+	my ($slist_index) = $path->get_indices;
+	my $row = $slist->{'data'}->[$slist_index];
+	return FALSE if not defined $row or $row->[$slist_app_index_colum_index] < 0;
+	my $is_ticked = $row->[$which eq 'system' ? $slist_system_default_app_checkbox_colum_index : $slist_default_app_checkbox_colum_index];
+	my $text = checkbox_tooltip_text($which, $row->[$slist_app_index_colum_index], $is_ticked);
+	return FALSE if not defined $text;
+	$tooltip->set_text($text);
+	$slist->set_tooltip_cell($tooltip, $path, $column, undef);
+	return TRUE;
 }
 
 sub list_rows_reordered
@@ -491,7 +787,7 @@ sub list_rows_reordered
 			}
 		}
 		
-		eval { save_default_apps(); 1 } or warn $@;
+		eval { save_user_default_apps(); 1 } or warn $@;
 		return FALSE;
 	});
 	return 1;
@@ -499,18 +795,22 @@ sub list_rows_reordered
 
 sub toggle_default_app_checkbox
 {
-	my ($cellrenderer, $slist_index) = @_;
-	my $is_ticked = $slist->{'data'}->[$slist_index]->[$slist_default_app_checkbox_colum_index];
+	my ($cellrenderer, $slist_index, $which) = @_;
+	my $ticked_colum_index = $which eq 'system' ? $slist_system_default_app_checkbox_colum_index : $slist_default_app_checkbox_colum_index;
+	# the list already flipped the value
+	my $is_ticked = $slist->{'data'}->[$slist_index]->[$ticked_colum_index];
 	my $done = 0;
-	if(defined app_at($slist_index) and defined $default_mime_type)
+	my $app = app_at($slist_index);
+	if(defined $app and defined $default_mime_type
+		and checkbox_editable($which, $slist->{'data'}->[$slist_index]->[$slist_app_index_colum_index], !$is_ticked))
 	{
-		eval { save_default_apps(); 1 };
+		eval { $which eq 'system' ? save_system_default_app($slist_index, $is_ticked) : save_user_default_apps(); 1 };
 		$done = !$@;
 		warn $@ if $@;
 	}
 	if(!$done)
 	{
-		$slist->{'data'}->[$slist_index]->[$slist_default_app_checkbox_colum_index] = !$is_ticked;
+		$slist->{'data'}->[$slist_index]->[$ticked_colum_index] = !$is_ticked;
 	}
 }
 
@@ -778,11 +1078,14 @@ sub set_list_app_items
 		}
 		
 		$select_index_by_default = $index if not defined $select_index_by_default and $app->{'is_default_app'};
-		push @$slist_data, [$pxb, sprintf("<big>%s</big>\n<small>%s</small>", pango_escape($appname), pango_escape($app->get('Exec'))), $app->{'is_default_app'} ? TRUE : FALSE, $index];
+		my $desktop_file_name = basename($app->{'file'});
+		my $user_default = (defined $default_mime_type and grep {$_ eq $desktop_file_name} @user_default_names) ? TRUE : FALSE;
+		my $system_default = (defined $default_mime_type and $system_default_files{$desktop_file_name}) ? TRUE : FALSE;
+		push @$slist_data, [$pxb, sprintf("<big>%s</big>\n<small>%s</small>", pango_escape($appname), pango_escape($app->get('Exec'))), $user_default, $system_default, $index];
 	}
 	
 	$slist->select($select_index_by_default || 0);
-	push @$slist_data, [Gtk2::Button->new->render_icon('gtk-add', 'button'), '<big>'."Custom application...".'</big>', FALSE, -1];
+	push @$slist_data, [Gtk2::Button->new->render_icon('gtk-add', 'button'), '<big>'."Custom application...".'</big>', FALSE, FALSE, -1];
 }
 
 sub filter_apps

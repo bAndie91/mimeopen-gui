@@ -9,9 +9,10 @@ Graphical "Open with..." application chooser for Freedesktop compatible environm
 
 - `mimeopen-gui [<FILE> | <URL>]` shows a list of applications in a normal Gtk2 window which claim to be able to open the given file or URL.
 - default apps are sorted to the top
-- tick the checkbox in an application's row to make it default. Multiple default apps are allowed.
-- when the files to open have only one MIME type, drag and drop the rows to reorder them: the upper a ticked application is, the more preferred it is in your `mimeapps.list`. Unticking all applications removes the MIME type from it.
-
+- the first column of checkboxes is your own setting (`$XDG_CONFIG_HOME/mimeapps.list`): tick an application's row to make it a default opener. Multiple default apps are allowed.
+- the second column of checkboxes shows the system-wide settings (`$XDG_CONFIG_DIRS`, `$XDG_DATA_DIRS`). It is changeable only if you can write the file. Hover over a checkbox to see the file where the setting comes from.
+- when the files to open have only one MIME type, drag and drop the rows to reorder them: the upper a ticked application is, the more preferred it is in your `mimeapps.list`. Unticking all applications removes the MIME type from it. Entries of not installed applications are kept.
+- only the `[Default Applications]` section of the `mimeapps.list` files is read and written, `[Added Associations]` and the others are left alone.
 
 # Project issues, bugs, feature requests, ideas
 
