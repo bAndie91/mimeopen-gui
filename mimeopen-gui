@@ -269,10 +269,10 @@ $cntr1 = new Gtk2::VBox();
 #$cntr2 = new Gtk2::HBox();
 $cntr3 = new Gtk2::HBox();
 $cntr3a = new Gtk2::HBox();
-$directory_row = LabelRow->new();
 $basename_row = LabelRow->new();
 $mime_type_row = LabelRow->new();
 $canon_mime_type_row = LabelRow->new();
+$directory_row = LabelRow->new();
 $scrwin = new Gtk2::ScrolledWindow();
 $slist = new Gtk2::SimpleList('icon'=>'pixbuf', 'label'=>'markup', 'is_default'=>'bool', 'is_default_system'=>'bool', 'app_index'=>'hidden');
 $slist_default_app_checkbox_colum_index = 2;
@@ -289,10 +289,10 @@ $btn_edit = Gtk2::Button->new_from_stock('gtk-edit');
 $window->add($cntr0v);
 $cntr0v->pack_start($cntr0h, TRUE, TRUE, 4);
 $cntr0h->pack_start($cntr1, TRUE, TRUE, 4);
-$cntr1->pack_start($directory_row->container, FALSE, TRUE, 0);
 $cntr1->pack_start($basename_row->container, FALSE, TRUE, 0);
 $cntr1->pack_start($mime_type_row->container, FALSE, TRUE, 0);
 $cntr1->pack_start($canon_mime_type_row->container, FALSE, TRUE, 0);
+$cntr1->pack_start($directory_row->container, FALSE, TRUE, 0);
 $cntr1->pack_start($scrwin, TRUE, TRUE, 0);
 $cntr1->pack_start($input_cmd, FALSE, TRUE, 0);
 #$cntr1->pack_start($cntr2, FALSE, TRUE, 0);
@@ -1028,7 +1028,7 @@ sub set_list_app_items
 {
 	my ($slist, @apps) = @_;
 	my $slist_data = $slist->{'data'};
-	my $pref_size = 24;
+	my $pref_size = 48;
 	my $select_index_by_default = undef;
 	my $index = -1;
 	
@@ -1111,7 +1111,9 @@ sub set_list_app_items
 		my $desktop_file_name = basename($app->{'file'});
 		my $user_default = (defined $default_mime_type and $Default_Files{'user'}->{$desktop_file_name}) ? TRUE : FALSE;
 		my $system_default = (defined $default_mime_type and $Default_Files{'system'}->{$desktop_file_name}) ? TRUE : FALSE;
-		push @$slist_data, [$pxb, sprintf("<big>%s</big>\n<small>%s</small>", pango_escape($appname), pango_escape($app->get('Exec'))), $user_default, $system_default, $index];
+		push @$slist_data, [$pxb,
+			sprintf("<big>%s</big>\n<small>%s</small>\n<small><tt>%s</tt></small>", pango_escape($appname), pango_escape($app->get('Comment')), pango_escape($app->get('Exec'))),
+			$user_default, $system_default, $index];
 	}
 	
 	$slist->select($select_index_by_default || 0);
