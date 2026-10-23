@@ -505,6 +505,21 @@ sub find_desktop_entry
 	return $file ? File::DesktopEntry->new($file) : undef;
 }
 
+sub app_property
+{
+	# a property of an application (File::DesktopEntry object) in the user's language, eg. Name[hu] or Comment[hu];
+	# each property falls back to its unlocalized value independently of the others
+	my ($app, $key) = @_;
+	my $file = $app->{'file'};
+	if(defined $file and length $file)
+	{
+		my $value = DesktopEntryL10n::get($file, $key);
+		return $value if defined $value;
+	}
+	# not backed by a readable file (eg. the custom command), or the key is missing
+	return $app->get($key);
+}
+
 sub env_dirs
 {
 	my ($var, $default) = @_;
@@ -866,7 +881,7 @@ sub try_run
 	{
 		$CHILD->{$pid} = {};
 		if(defined $selected_app) {
-			$CHILD->{$pid}->{'appname'} = $selected_app->get('Name');
+			$CHILD->{$pid}->{'appname'} = app_property($selected_app, 'Name');
 		} else {
 			$CHILD->{$pid}->{'appname'} = basename($exe);
 		}
@@ -1037,7 +1052,7 @@ sub set_list_app_items
 		$index ++;
 		my $pxb;
 		my $iconname = $app->get('Icon');
-		my $appname = $app->get('Name');
+		my $appname = app_property($app, 'Name');
 		if($iconname)
 		{
 			my $iconpath;
@@ -1112,7 +1127,7 @@ sub set_list_app_items
 		my $user_default = (defined $default_mime_type and $Default_Files{'user'}->{$desktop_file_name}) ? TRUE : FALSE;
 		my $system_default = (defined $default_mime_type and $Default_Files{'system'}->{$desktop_file_name}) ? TRUE : FALSE;
 		push @$slist_data, [$pxb,
-			sprintf("<big>%s</big>\n<small>%s</small>\n<small><tt>%s</tt></small>", pango_escape($appname), pango_escape($app->get('Comment')), pango_escape($app->get('Exec'))),
+			sprintf("<big>%s</big>\n<small>%s</small>\n<small><tt>%s</tt></small>", pango_escape($appname), pango_escape(app_property($app, 'Comment')), pango_escape($app->get('Exec'))),
 			$user_default, $system_default, $index];
 	}
 	
@@ -1195,3 +1210,175 @@ sub scroll_viewport
 	$new = $adj->upper - $width if $new + $width > $adj->upper;
 	$adj->set_value($new);
 }
+
+
+package DesktopEntryL10n;
+# Localized access to the keys of a Desktop Entry file (.desktop).
+#
+# Usage: my $name = DesktopEntryL10n::get('/usr/share/applications/foo.desktop', 'Name');
+#
+# Returns the value of Name[<locale>] best matching the user's language, else the plain Name, else undef.
+# Every key is resolved on its own, so a localized Comment can come with an unlocalized Name and vice versa.
+#
+# Which locale(s) to use (the Desktop Entry Specification says LC_MESSAGES; the rest is POSIX and GNU gettext convention):
+#  - the first non-empty of LC_ALL, LC_MESSAGES, LANG is the locale (POSIX); the locale "C" or "POSIX" means no translation
+#  - LANGUAGE (GNU extension, not in POSIX) is a colon-separated priority list of locales, preferred over the above,
+#    but only if the locale above is not "C"/"POSIX", like in gettext; its list ends at the first "C"/"POSIX" entry
+#  - LC_NAME, LC_CTYPE etc. are not involved
+#
+# A locale has the form lang[_COUNTRY][.ENCODING][@MODIFIER], eg. hu, hu_HU, hu_HU.UTF-8, sr_RS@latin, fil_PH.
+# For such a locale the keys tried, in order, are (the encoding is ignored):
+#  Key[lang_COUNTRY@MODIFIER], Key[lang_COUNTRY], Key[lang@MODIFIER], Key[lang], then the plain Key.
+# Parts missing from the locale are skipped, and locale names are case-sensitive.
+# For a LANGUAGE list, all of these are tried for the first locale, then for the second, and so on.
+# An empty localized value counts as missing.
+use strict;
+use warnings;
+use Encode ();
+
+our %Cache;
+
+sub effective_locale
+{
+	# the locale of the LC_MESSAGES category as POSIX defines it, or undef
+	my ($env) = @_;
+	$env ||= \%ENV;
+	for my $var (qw/LC_ALL LC_MESSAGES LANG/)
+	{
+		return $env->{$var} if defined $env->{$var} and length $env->{$var};
+	}
+	return undef;
+}
+
+sub parse_locale
+{
+	# (lang, COUNTRY, ENCODING, MODIFIER) of a locale name, the missing parts are undef
+	my ($locale) = @_;
+	$locale =~ /^([^_.@]+)(?:_([^.@]*))?(?:\.([^@]*))?(?:@(.*))?$/ or return ();
+	my @parts = ($1, $2, $3, $4);
+	return map {(defined $_ and length $_) ? $_ : undef} @parts;
+}
+
+sub is_untranslated_lang
+{
+	my ($lang) = @_;
+	return (defined $lang and ($lang eq 'C' or $lang eq 'POSIX')) ? 1 : 0;
+}
+
+sub message_locales
+{
+	# the locales to try, the most preferred first
+	my ($env) = @_;
+	$env ||= \%ENV;
+	my $locale = effective_locale($env);
+	return () if not defined $locale or $locale eq 'C' or $locale eq 'POSIX';
+	my @list = ($locale);
+	my $language = $env->{'LANGUAGE'};
+	if(defined $language)
+	{
+		my @language_list = grep {length} split /:/, $language;
+		@list = @language_list if @language_list;
+	}
+	my @locales;
+	for my $item (@list)
+	{
+		my ($lang) = parse_locale($item);
+		last if not defined $lang or is_untranslated_lang($lang);
+		push @locales, $item;
+	}
+	return @locales;
+}
+
+sub locale_suffixes
+{
+	# the [..] parts of the keys to look for a locale, the most specific first
+	my ($locale) = @_;
+	my ($lang, $country, undef, $modifier) = parse_locale($locale);
+	return () if not defined $lang or is_untranslated_lang($lang);
+	my @suffixes;
+	push @suffixes, "${lang}_${country}\@${modifier}" if defined $country and defined $modifier;
+	push @suffixes, "${lang}_${country}" if defined $country;
+	push @suffixes, "${lang}\@${modifier}" if defined $modifier;
+	push @suffixes, $lang;
+	return @suffixes;
+}
+
+sub suffixes_for_env
+{
+	my ($env) = @_;
+	my %seen;
+	return grep {!$seen{$_}++} map {locale_suffixes($_)} message_locales($env);
+}
+
+sub unescape
+{
+	# escape sequences of the string values
+	my ($value) = @_;
+	my %char = ('s' => ' ', 'n' => "\n", 't' => "\t", 'r' => "\r", '\\' => '\\');
+	$value =~ s/\\(.)/exists $char{$1} ? $char{$1} : "\\$1"/ge;
+	return $value;
+}
+
+sub parse_entry
+{
+	# the keys of a group of the file contents (characters, not bytes) as a hash: 'Key' and 'Key[locale]' => value
+	my ($text, $group) = @_;
+	$group = 'Desktop Entry' if not defined $group;
+	$text =~ s/^\x{FEFF}//;
+	my %entry;
+	my $in_group = 0;
+	for my $line (split /\r?\n/, $text)
+	{
+		next if $line =~ /^\s*(?:#|$)/;
+		if($line =~ /^\s*\[([^\[\]]+)\]\s*$/)
+		{
+			$in_group = ($1 eq $group) ? 1 : 0;
+			next;
+		}
+		next if not $in_group;
+		$line =~ /^\s*([A-Za-z0-9-]+)(?:\[([^\]]*)\])?\s*=\s*(.*?)\s*$/ or next;
+		my ($key, $locale, $value) = ($1, $2, $3);
+		if(defined $locale)
+		{
+			# the encoding is not a part of the matching
+			$locale =~ s/\.[^@]*//;
+			$key .= "[$locale]";
+		}
+		$entry{$key} = unescape($value) if not exists $entry{$key};
+	}
+	return \%entry;
+}
+
+sub read_entry
+{
+	# parsed keys of a group of a file (cached), or undef if the file can not be read
+	my ($file, $group) = @_;
+	$group = 'Desktop Entry' if not defined $group;
+	my $cache_key = "$group\0$file";
+	return $Cache{$cache_key} if exists $Cache{$cache_key};
+	my $entry;
+	if(open my $fh, '<:raw', $file)
+	{
+		local $/;
+		my $bytes = <$fh>;
+		close $fh;
+		$entry = parse_entry(Encode::decode('UTF-8', defined $bytes ? $bytes : ''), $group);
+	}
+	return $Cache{$cache_key} = $entry;
+}
+
+sub get
+{
+	# get($file, $key, group => 'Desktop Entry', env => \%ENV)
+	my ($file, $key, %opt) = @_;
+	my $entry = read_entry($file, $opt{'group'});
+	return undef if not defined $entry;
+	for my $suffix (suffixes_for_env($opt{'env'}))
+	{
+		my $value = $entry->{"$key\[$suffix]"};
+		return $value if defined $value and length $value;
+	}
+	return $entry->{$key};
+}
+
+1;
