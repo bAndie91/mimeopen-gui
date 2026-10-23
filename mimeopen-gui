@@ -251,6 +251,14 @@ for my $mime_type (@mime_types)
 
 
 
+sub pango_escape
+{
+	my $s = shift;
+	$s =~ s/&/&amp;/g;
+	$s =~ s/</&lt;/g;
+	$s =~ s/>/&gt;/g;
+	return $s;
+}
 sub pango_bold
 {
 	return sprintf("<b>%s</b>", Glib::Markup::escape_text($_[0]));
@@ -1030,14 +1038,6 @@ sub icondir2size
 	return(($_[0] =~ /\/(\d+)x\d+/)[0]);
 }
 
-sub pango_escape
-{
-	my ($s) = @_;
-	$s =~ s/</&lt;/g;
-	$s =~ s/>/&gt;/g;
-	$s =~ s/&/&amp;/g;
-	return $s;
-}
 
 sub set_list_app_items
 {
@@ -1210,6 +1210,8 @@ sub scroll_viewport
 	$new = $adj->upper - $width if $new + $width > $adj->upper;
 	$adj->set_value($new);
 }
+
+1;
 
 
 package DesktopEntryL10n;
