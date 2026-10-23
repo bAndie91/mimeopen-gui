@@ -392,7 +392,7 @@ $slist->signal_connect('query-tooltip', \&list_tooltip);
 $btn_open->signal_connect('clicked' => \&btnclk_open);
 $btn_cncl->signal_connect('clicked' => \&main_quit);
 set_stock_button_label($btn_edit, '');
-$btn_edit->set_tooltip_text("Open Application Assignments config file(s)");
+$btn_edit->set_tooltip_text("Open MIME Applications config file(s)");
 $btn_edit->signal_connect('clicked' => \&btnclk_edit);
 
 {
@@ -731,18 +731,16 @@ sub checkbox_tooltip_text
 	if($which eq 'user')
 	{
 		my $file = user_mimeapps_file();
-		$text = ($is_ticked ? "Default opener in your settings" : "Set as default opener in your settings") . "\n" . $file;
-		$text .= "\n(you can not change it)" if not $editable;
+		$text = ($is_ticked ? "Default Application in user settings" : "Set as default Application in user settings") . "\n" . $file;
 	}
 	elsif($is_ticked)
 	{
-		$text = "Default opener in system-wide settings\n" . join("\n", @{$system_default_files{$name} || []});
-		$text .= "\n(you can not change it)" if not $editable;
+		$text = "Default Application in system settings\n" . join("\n", @{$system_default_files{$name} || []});
 	}
 	else
 	{
 		my $file = system_target_file();
-		$text = defined $file ? "Set as default opener in system-wide settings\n" . $file : "Not a default opener in system-wide settings\n(you can not change them)";
+		$text = defined $file ? "Set as default Application in system settings\n" . $file : "Not default Application in system settings";
 	}
 	return $text;
 }
@@ -763,7 +761,7 @@ sub list_tooltip
 	my $text = checkbox_tooltip_text($which, $row->[$slist_app_index_colum_index], $is_ticked);
 	return FALSE if not defined $text;
 	$tooltip->set_text($text);
-	$slist->set_tooltip_cell($tooltip, $path, $column, undef);
+	$slist->set_tooltip_cell($tooltip, $path, $column, ($column->get_cell_renderers)[0]);
 	return TRUE;
 }
 
@@ -876,8 +874,9 @@ sub check_children
 	if(not %$CHILD)
 	{
 		main_quit();
+		return 0;
 	}
-	1;  # keep running
+	return 1;  # keep running
 }
 
 sub btnclk_open
