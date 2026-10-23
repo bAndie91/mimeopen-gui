@@ -236,7 +236,7 @@ for my $mime_type (@mime_types)
 		push @default_mime_keys, $mime_type if $mime_type ne $canon_mime_type;
 		load_default_apps_config();
 		my %seen_default_name;
-		@default_apps = grep {defined} map {find_desktop_entry($_)} grep {!$seen_default_name{$_}++} (@user_default_names, @system_default_names);
+		@default_apps = grep {defined} map {find_desktop_entry($_)} grep {!$seen_default_name{$_}++} (@{$Default_Names{'user'}}, @{$Default_Names{'system'}});
 		map {$_->{'mime_type'} = $canon_mime_type} @default_apps;
 	}
 	map {$_->{'is_default_app'} = 1 if defined $_} @default_apps;
@@ -518,29 +518,52 @@ sub user_mimeapps_file
 	return File::BaseDir::config_home('mimeapps.list');
 }
 
-sub system_mimeapps_files
+sub is_user_path
 {
-	# other than the user's one, the most precedent first, as the library reads them
-	my $user_file = user_mimeapps_file();
+	# per-user location: under the home directory, or in the XDG_*_HOME directories
+	my ($path) = @_;
+	my @roots = grep {defined $_ and length $_} (
+		$ENV{'HOME'},
+		(getpwuid($<))[7],
+		dirname(File::BaseDir::config_home('mimeapps.list')),
+		dirname(dirname(File::BaseDir::data_home('applications', 'mimeapps.list'))),
+	);
+	$path = File::Spec->canonpath($path);
+	return scalar grep {my $root = File::Spec->canonpath($_); $root ne File::Spec->rootdir and index($path, "$root/") == 0} @roots;
+}
+
+sub mimeapps_files
+{
+	# all the files which the library reads, the most precedent first
 	my @files = (
+		user_mimeapps_file(),
 		(map {File::Spec->catfile($_, 'mimeapps.list')} env_dirs('XDG_CONFIG_DIRS', '/etc/xdg')),
 		File::BaseDir::data_home('applications', 'mimeapps.list'),
 		(map {File::Spec->catfile($_, 'applications', 'mimeapps.list')} env_dirs('XDG_DATA_DIRS', '/usr/local/share:/usr/share')),
 		File::BaseDir::data_home('applications', 'defaults.list'),
 	);
-	my %seen = ($user_file => 1);
+	my %seen;
 	return grep {!$seen{$_}++} @files;
 }
 
-sub system_target_file
+sub layer_files
 {
-	# the system-wide file to set default apps in: the first writable one
-	my @files = (
-		(map {File::Spec->catfile($_, 'mimeapps.list')} env_dirs('XDG_CONFIG_DIRS', '/etc/xdg')),
-		(map {File::Spec->catfile($_, 'applications', 'mimeapps.list')} env_dirs('XDG_DATA_DIRS', '/usr/local/share:/usr/share')),
-	);
-	my $user_file = user_mimeapps_file();
-	for my $file (grep {$_ ne $user_file} @files)
+	# files of the per-user ('user') or the system-wide ('system') settings
+	my ($which) = @_;
+	my $primary = user_mimeapps_file();
+	return grep {$which eq 'user' ? ($_ eq $primary or is_user_path($_)) : ($_ ne $primary and !is_user_path($_))} mimeapps_files();
+}
+
+sub layer_target
+{
+	# the file to set default apps in: the user's mimeapps.list, or the first writable system-wide one
+	my ($which) = @_;
+	if($which eq 'user')
+	{
+		my $file = user_mimeapps_file();
+		return path_writable($file) ? $file : undef;
+	}
+	for my $file (grep {basename($_) eq 'mimeapps.list'} layer_files('system'))
 	{
 		return $file if path_writable($file);
 	}
@@ -567,15 +590,19 @@ sub names_in_file
 
 sub load_default_apps_config
 {
-	@user_default_names = names_in_file(user_mimeapps_file(), @default_mime_keys);
-	@system_default_names = ();
-	%system_default_files = ();
-	for my $file (system_mimeapps_files())
+	%Default_Names = ();
+	%Default_Files = ();
+	for my $which ('user', 'system')
 	{
-		for my $name (names_in_file($file, @default_mime_keys))
+		$Default_Names{$which} = [];
+		$Default_Files{$which} = {};
+		for my $file (layer_files($which))
 		{
-			push @system_default_names, $name if not $system_default_files{$name};
-			push @{$system_default_files{$name}}, $file if not grep {$_ eq $file} @{$system_default_files{$name}};
+			for my $name (names_in_file($file, @default_mime_keys))
+			{
+				push @{$Default_Names{$which}}, $name if not $Default_Files{$which}->{$name};
+				push @{$Default_Files{$which}->{$name}}, $file if not grep {$_ eq $file} @{$Default_Files{$which}->{$name}};
+			}
 		}
 	}
 }
@@ -632,14 +659,28 @@ sub save_user_default_apps
 		my $name = basename($app->{'file'});
 		push @ticked, $name if not $seen{$name}++;
 	}
+	
+	# an app unticked is removed from the other per-user files as well
+	for my $other_file (grep {$_ ne $file} layer_files('user'))
+	{
+		for my $key (@default_mime_keys)
+		{
+			my @names = names_in_file($other_file, $key);
+			my @kept = grep {!($known{$_} and not $seen{$_})} @names;
+			set_default_names($other_file, $key, @kept) if scalar @kept != scalar @names;
+		}
+	}
+	
+	# all the ticked apps are set in the order of the rows in the primary file
 	my @new = merge_default_list(\@existing, \@ticked, \%known);
 	# reordering of unticked apps changes nothing
-	return if join(';', @new) eq join(';', @existing);
-	
-	my @keys = ($default_mime_type);
-	# keep the alias in sync if it has its own setting
-	push @keys, grep {$_ ne $default_mime_type and names_in_file($file, $_)} @default_mime_keys;
-	set_default_names($file, $_, @new) for @keys;
+	if(join(';', @new) ne join(';', @existing))
+	{
+		my @keys = ($default_mime_type);
+		# keep the alias in sync if it has its own setting
+		push @keys, grep {$_ ne $default_mime_type and names_in_file($file, $_)} @default_mime_keys;
+		set_default_names($file, $_, @new) for @keys;
+	}
 	load_default_apps_config();
 }
 
@@ -650,7 +691,7 @@ sub save_system_default_app
 	my $name = basename($app->{'file'});
 	if($ticked)
 	{
-		my $file = system_target_file();
+		my $file = layer_target('system');
 		die "No writable system-wide settings file\n" if not defined $file;
 		my @names = names_in_file($file, $default_mime_type);
 		return if grep {$_ eq $name} @names;
@@ -671,7 +712,7 @@ sub save_system_default_app
 	}
 	else
 	{
-		for my $file (@{$system_default_files{$name} || []})
+		for my $file (@{$Default_Files{'system'}->{$name} || []})
 		{
 			die "Not writable: $file\n" if not path_writable($file);
 			for my $key (@default_mime_keys)
@@ -689,16 +730,11 @@ sub checkbox_editable
 {
 	my ($which, $app_n, $is_ticked) = @_;
 	return 0 if not defined $default_mime_type;
-	if($which eq 'user')
-	{
-		return path_writable(user_mimeapps_file()) ? 1 : 0;
-	}
-	if(not $is_ticked)
-	{
-		return defined system_target_file() ? 1 : 0;
-	}
+	# to tick it, there is a file to write it in
+	return defined layer_target($which) ? 1 : 0 if not $is_ticked;
+	# to untick it, it is to be removed from all the files which set it
 	my $name = basename($apps[$app_n]->{'file'});
-	my @files = @{$system_default_files{$name} || []};
+	my @files = @{$Default_Files{$which}->{$name} || []};
 	return (@files and not grep {!path_writable($_)} @files) ? 1 : 0;
 }
 
@@ -726,21 +762,16 @@ sub checkbox_tooltip_text
 	my $app = $apps[$app_n];
 	return undef if not defined $app or not defined $default_mime_type;
 	my $name = basename($app->{'file'});
-	my $editable = checkbox_editable($which, $app_n, $is_ticked);
+	my $settings = $which eq 'system' ? 'system settings' : 'user settings';
 	my $text;
-	if($which eq 'user')
+	if($is_ticked)
 	{
-		my $file = user_mimeapps_file();
-		$text = ($is_ticked ? "Default Application in user settings" : "Set as default Application in user settings") . "\n" . $file;
-	}
-	elsif($is_ticked)
-	{
-		$text = "Default Application in system settings\n" . join("\n", @{$system_default_files{$name} || []});
+		$text = "Default Application in $settings\n" . join("\n", @{$Default_Files{$which}->{$name} || []});
 	}
 	else
 	{
-		my $file = system_target_file();
-		$text = defined $file ? "Set as default Application in system settings\n" . $file : "Not default Application in system settings";
+		my $file = layer_target($which);
+		$text = defined $file ? "Set as default Application in $settings\n" . $file : "Not default Application in $settings";
 	}
 	return $text;
 }
@@ -1078,8 +1109,8 @@ sub set_list_app_items
 		
 		$select_index_by_default = $index if not defined $select_index_by_default and $app->{'is_default_app'};
 		my $desktop_file_name = basename($app->{'file'});
-		my $user_default = (defined $default_mime_type and grep {$_ eq $desktop_file_name} @user_default_names) ? TRUE : FALSE;
-		my $system_default = (defined $default_mime_type and $system_default_files{$desktop_file_name}) ? TRUE : FALSE;
+		my $user_default = (defined $default_mime_type and $Default_Files{'user'}->{$desktop_file_name}) ? TRUE : FALSE;
+		my $system_default = (defined $default_mime_type and $Default_Files{'system'}->{$desktop_file_name}) ? TRUE : FALSE;
 		push @$slist_data, [$pxb, sprintf("<big>%s</big>\n<small>%s</small>", pango_escape($appname), pango_escape($app->get('Exec'))), $user_default, $system_default, $index];
 	}
 	
