@@ -289,6 +289,7 @@ $slist_app_index_colum_index = 4;
 $input_cmd = new Gtk2::Entry();
 $input_cmd_autocompletion = new Gtk2::EntryCompletion();
 $btn_open = Gtk2::Button->new_from_stock('gtk-open');
+$btn_open_keep = Gtk2::Button->new_from_stock('gtk-open');
 $btn_cncl = Gtk2::Button->new_from_stock('gtk-cancel');
 $btn_edit = Gtk2::Button->new_from_stock('gtk-edit');
 
@@ -308,6 +309,7 @@ $cntr1->pack_start($cntr3, FALSE, TRUE, 0);
 $scrwin->add($slist);
 $cntr3->pack_start($cntr3a, TRUE, TRUE, 0);
 $cntr3a->pack_start($btn_open, TRUE, FALSE, 0);
+$cntr3a->pack_start($btn_open_keep, TRUE, FALSE, 0);
 $cntr3a->pack_start($btn_cncl, TRUE, FALSE, 0);
 $cntr3->pack_start($btn_edit, FALSE, FALSE, 0);
 
@@ -399,6 +401,15 @@ $slist->signal_connect('query-tooltip', \&list_tooltip);
 
 
 $btn_open->signal_connect('clicked' => \&btnclk_open);
+{
+	# same label as the Open button has, with a subtitle
+	my $stock = Gtk2::Stock->lookup('gtk-open');
+	my $open_text = defined $stock ? $stock->{'label'} : '_Open';
+	$open_text =~ s/_//g;
+	set_stock_button_markup($btn_open_keep,
+		Glib::Markup::escape_text($open_text).$LF.'<small>'.Glib::Markup::escape_text("application chooser stays open").'</small>');
+}
+$btn_open_keep->signal_connect('clicked' => \&btnclk_open_keep);
 $btn_cncl->signal_connect('clicked' => \&main_quit);
 set_stock_button_label($btn_edit, '');
 $btn_edit->set_tooltip_text("Open MIME Applications config file(s)");
@@ -420,6 +431,9 @@ $custom_command_input_changed_signal_lock = 0;
 $app_selection_changed_signal_lock = 0;
 $CHILD = {};
 $EXIT_STATUS = 0;
+# set when the user is done with the window (it is hidden): quit when the started applications are finished
+$window_dismissed = 0;
+$check_children_timer = undef;
 
 $SIG{'CHLD'} = sub {
 	# SIGCHLD of several children exiting at the same time may be merged into one signal: reap all of them
@@ -911,14 +925,15 @@ sub try_run
 sub try_run_multi
 {
 	my ($selected_app, $exe, @paths) = @_;
-	try_run_apps([[$selected_app, $exe]], @paths);
+	try_run_apps(0, [[$selected_app, $exe]], @paths);
 }
 
 sub try_run_apps
 {
 	# start all the applications in parallel, each of them with each of the paths;
-	# $runs is a list of [$selected_app, $exe] pairs, see try_run()
-	my ($runs, @paths) = @_;
+	# $runs is a list of [$selected_app, $exe] pairs, see try_run();
+	# unless $keep_open, the window is hidden and the program quits when all the applications are finished
+	my ($keep_open, $runs, @paths) = @_;
 	for my $run (@$runs)
 	{
 		my ($selected_app, $exe) = @$run;
@@ -927,8 +942,18 @@ sub try_run_apps
 			try_run($selected_app, $exe, $filepath);
 		}
 	}
-	$window->hide();
-	Glib::Timeout->add(300, \&check_children);
+	if(not $keep_open)
+	{
+		$window_dismissed = 1;
+		$window->hide();
+	}
+	watch_children();
+}
+
+sub watch_children
+{
+	return if defined $check_children_timer;
+	$check_children_timer = Glib::Timeout->add(300, \&check_children);
 }
 
 sub check_children
@@ -951,7 +976,8 @@ sub check_children
 	}
 	if(not %$CHILD)
 	{
-		main_quit();
+		$check_children_timer = undef;
+		main_quit() if $window_dismissed;
 		return 0;
 	}
 	return 1;  # keep running
@@ -974,6 +1000,7 @@ sub choose_custom_application
 
 sub open_selected
 {
+	my ($keep_open) = @_;
 	my @selected = $slist->get_selected_indices();
 	if(@selected)
 	{
@@ -994,7 +1021,7 @@ sub open_selected
 				push @runs, [undef, $exe];
 			}
 		}
-		try_run_apps(\@runs, @Files);
+		try_run_apps($keep_open, \@runs, @Files);
 	}
 	else
 	{
@@ -1007,13 +1034,19 @@ sub open_selected
 			"Type=Application".$LF.
 			"StartupNotify=true";
 		my $app = File::DesktopEntry->new(\$desktop_entry);
-		try_run_multi($app, undef, @Files);
+		try_run_apps($keep_open, [[$app, undef]], @Files);
 	}
 }
 
 sub btnclk_open
 {
-	open_selected();
+	open_selected(0);
+}
+
+sub btnclk_open_keep
+{
+	# the same as Open, but the window stays
+	open_selected(1);
 }
 
 sub dblclk_list
@@ -1023,7 +1056,7 @@ sub dblclk_list
 	my $selection = $slist->get_selection;
 	$selection->unselect_all;
 	$selection->select_path($tpath);
-	open_selected();
+	open_selected(0);
 }
 
 sub app_dirs {
@@ -1076,6 +1109,18 @@ sub set_stock_button_label
 	my ($a) = $a->get_children; # HBox
 	my ($i, $l) = $a->get_children;
 	$l->set_label($text);
+}
+
+sub set_stock_button_markup
+{
+	# like set_stock_button_label, but the text may have more lines and Pango markup, and it is no mnemonic
+	my ($wdg, $markup) = @_;
+	my ($a) = $wdg->get_children; # Alignment
+	my ($a) = $a->get_children; # HBox
+	my ($i, $l) = $a->get_children;
+	$l->set_use_underline(FALSE);
+	$l->set_justify('center');
+	$l->set_markup($markup);
 }
 
 sub icondir2size
