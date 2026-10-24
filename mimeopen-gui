@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 
-use POSIX ":sys_wait_h";
+use POSIX qw/:sys_wait_h/;
 use Encode qw/encode decode/;
 use Data::Dumper;
 use File::MimeInfo;
@@ -917,8 +917,8 @@ sub check_children
 		if(exists $CHILD->{$pid}->{'status'})
 		{
 			my $wstatus = $CHILD->{$pid}->{'status'};
-			my $status = $wstatus & 127;
-			my $signal = $wstatus >> 8;
+			my $status = WEXITSTATUS($wstatus);
+			my $signal = WTERMSIG($wstatus);
 			if($status != 0 or $signal != 0)
 			{
 				error_message(sprintf("Could not run %s.", $CHILD->{$pid}->{'appname'}), "error $status, signal $signal");
