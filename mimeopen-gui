@@ -371,6 +371,7 @@ else
 $scrwin->set_policy('automatic', 'automatic');
 $slist->set_headers_visible(FALSE);
 $slist->set_rules_hint(TRUE);
+$slist->get_selection->set_mode('multiple');
 $slist->get_selection->signal_connect('changed', \&click_list);
 $slist->signal_connect('row-activated', \&dblclk_list);
 set_list_app_items($slist, @apps);
@@ -486,8 +487,16 @@ sub click_list
 {
 	return 1 if $app_selection_changed_signal_lock;
 	
-	my ($app_n) = $slist->get_selected_indices();
-	my $selected_app = app_at($app_n);
+	my @selected = $slist->get_selected_indices();
+	if(scalar @selected > 1)
+	{
+		# the command line can show one application only
+		$custom_command_input_changed_signal_lock = 1;
+		$input_cmd->set_text('');
+		$custom_command_input_changed_signal_lock = 0;
+		return 1;
+	}
+	my $selected_app = app_at($selected[0]);
 	if(defined $selected_app)
 	{
 		my $exec_str = $selected_app->get('Exec');
@@ -902,9 +911,21 @@ sub try_run
 sub try_run_multi
 {
 	my ($selected_app, $exe, @paths) = @_;
-	for my $filepath (@paths)
+	try_run_apps([[$selected_app, $exe]], @paths);
+}
+
+sub try_run_apps
+{
+	# start all the applications in parallel, each of them with each of the paths;
+	# $runs is a list of [$selected_app, $exe] pairs, see try_run()
+	my ($runs, @paths) = @_;
+	for my $run (@$runs)
 	{
-		try_run($selected_app, $exe, $filepath);
+		my ($selected_app, $exe) = @$run;
+		for my $filepath (@paths)
+		{
+			try_run($selected_app, $exe, $filepath);
+		}
 	}
 	$window->hide();
 	Glib::Timeout->add(300, \&check_children);
@@ -936,32 +957,44 @@ sub check_children
 	return 1;  # keep running
 }
 
-sub btnclk_open
+sub choose_custom_application
 {
-	my ($app_n) = $slist->get_selected_indices();
-	if(defined $app_n)
+	# executable of the custom application, or undef if the user cancelled
+	my $exe;
+	my $dlg = new Gtk2::FileChooserDialog("Select an Application", $window, 'open');
+	$dlg->add_button('gtk-execute', 'ok');
+	$dlg->add_button('gtk-cancel', 'cancel');
+	if($dlg->run() eq 'ok')
 	{
-		my $selected_app = app_at($app_n);
-		if(defined $selected_app)
+		$exe = $dlg->get_filename();
+	}
+	$dlg->destroy();
+	return $exe;
+}
+
+sub open_selected
+{
+	my @selected = $slist->get_selected_indices();
+	if(@selected)
+	{
+		my @runs;
+		for my $app_n (@selected)
 		{
-			try_run_multi($selected_app, undef, @Files)
-		}
-		else
-		{
-			my $exe;
-			my $dlg = new Gtk2::FileChooserDialog("Select an Application", $window, 'open');
-			$dlg->add_button('gtk-execute', 'ok');
-			$dlg->add_button('gtk-cancel', 'cancel');
-			if($dlg->run() eq 'ok')
+			my $selected_app = app_at($app_n);
+			if(defined $selected_app)
 			{
-				$exe = $dlg->get_filename();
+				push @runs, [$selected_app, undef];
 			}
-			$dlg->destroy();
-			if(defined $exe)
+			else
 			{
-				try_run_multi(undef, $exe, @Files);
+				# "Custom application..." row
+				my $exe = choose_custom_application();
+				# cancelling it cancels the whole thing, nothing is started
+				return if not defined $exe;
+				push @runs, [undef, $exe];
 			}
 		}
+		try_run_apps(\@runs, @Files);
 	}
 	else
 	{
@@ -978,10 +1011,19 @@ sub btnclk_open
 	}
 }
 
+sub btnclk_open
+{
+	open_selected();
+}
+
 sub dblclk_list
 {
 	my ($lst, $tpath, $tvcol) = @_;
-	btnclk_open();
+	# start the application of the double-clicked row only, whatever else is selected
+	my $selection = $slist->get_selection;
+	$selection->unselect_all;
+	$selection->select_path($tpath);
+	open_selected();
 }
 
 sub app_dirs {
