@@ -421,11 +421,14 @@ $CHILD = {};
 $EXIT_STATUS = 0;
 
 $SIG{'CHLD'} = sub {
-	my $pid = waitpid(-1, WNOHANG);
-	my $wstatus = $?;
-	if(exists $CHILD->{$pid})
+	# SIGCHLD of several children exiting at the same time may be merged into one signal: reap all of them
+	while((my $pid = waitpid(-1, WNOHANG)) > 0)
 	{
-		$CHILD->{$pid}->{'status'} = $wstatus;
+		my $wstatus = $?;
+		if(exists $CHILD->{$pid})
+		{
+			$CHILD->{$pid}->{'status'} = $wstatus;
+		}
 	}
 };
 
