@@ -1056,7 +1056,9 @@ sub dblclk_list
 	my $selection = $slist->get_selection;
 	$selection->unselect_all;
 	$selection->select_path($tpath);
-	open_selected(0);
+	# holding Shift keeps the window open, like the second Open button
+	my $state = Gtk2->get_current_event_state;
+	open_selected(($state and ($state & 'shift-mask')) ? 1 : 0);
 }
 
 sub app_dirs {
