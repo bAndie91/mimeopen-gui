@@ -207,46 +207,13 @@ else
 	}
 }
 
-@mime_types = keys %mime_types;
+@mime_types = sort keys %mime_types;
+# the MIME types which are taken into account (checked), all of them at first
+%Mime_Type_Active = map {($_ => 1)} @mime_types;
+%Mime_Type_Button = ();
 
 
-@all_default_apps = ();
-@all_canonical_apps = ();
-@all_other_nonaliased_apps = ();
-%App_Mime_Types = ();
-
-for my $mime_type (@mime_types)
-{
-	my $canon_mime_type = mimetype_canon $mime_type;
-	my @canonical_apps = mime_applications_all($mime_type);
-	map {$_->{'mime_type'} = $canon_mime_type if defined $_} @canonical_apps;
-	push @all_canonical_apps, @canonical_apps;
-	
-	my @default_nonaliased_apps = File::MimeInfo::Applications::_default($mime_type);
-	my @other_nonaliased_apps = File::MimeInfo::Applications::_others($mime_type);
-	map {$_->{'mime_type'} = $mime_type if defined $_} @default_nonaliased_apps, @other_nonaliased_apps;
-	push @all_other_nonaliased_apps, @other_nonaliased_apps;
-	
-	my @default_apps = ($canonical_apps[0], @default_nonaliased_apps);
-	if(scalar @mime_types == 1)
-	{
-		# the library knows only one default app, but there can be more of them in the preferences
-		$default_mime_type = $canon_mime_type;
-		@default_mime_keys = ($canon_mime_type);
-		push @default_mime_keys, $mime_type if $mime_type ne $canon_mime_type;
-		load_default_apps_config();
-		my %seen_default_name;
-		@default_apps = grep {defined} map {find_desktop_entry($_)} grep {!$seen_default_name{$_}++} (@{$Default_Names{'user'}}, @{$Default_Names{'system'}});
-		map {$_->{'mime_type'} = $canon_mime_type} @default_apps;
-	}
-	map {$_->{'is_default_app'} = 1 if defined $_} @default_apps;
-	push @all_default_apps, @default_apps;
-	
-	map {$App_Mime_Types{$_->get('Exec')}{$mime_type} = 1 if defined $_} @canonical_apps, @default_apps, @default_nonaliased_apps, @other_nonaliased_apps;
-}
-
-%FilterApps_Seen = ();
-@apps = grep {&filter_apps} @all_default_apps, @all_canonical_apps, @all_other_nonaliased_apps;
+collect_apps();
 
 
 
@@ -365,9 +332,28 @@ if(scalar @mime_types == 1)
 }
 else
 {
-	my %types_detected = map { $_ => 1 } @mime_types, map { mimetype_canon $_ } @mime_types;
+	# a checkbox for each of the MIME types: the list of applications is made for the checked ones
 	$mime_type_row->intro_text("MIME types detected:");
-	$mime_type_row->label_markup(join ", ", map { pango_italic($_) } keys %types_detected);
+	my $mime_type_box = Gtk2::VBox->new(FALSE, 0);
+	for my $mime_type (@mime_types)
+	{
+		my $canon_mime_type = mimetype_canon $mime_type;
+		my $markup = pango_italic($mime_type);
+		$markup .= ' → ' . pango_italic($canon_mime_type) if $canon_mime_type ne $mime_type;
+		my $label = Gtk2::Label->new;
+		$label->set_markup($markup);
+		$label->set_alignment(0, 0.5);
+		$label->set_ellipsize('end');
+		$label->set_width_chars(16);
+		my $button = Gtk2::CheckButton->new;
+		$button->add($label);
+		$button->set_active(TRUE);
+		$button->set_tooltip_text($canon_mime_type ne $mime_type ? "$mime_type\n(canonical: $canon_mime_type)" : $mime_type);
+		$button->signal_connect('toggled' => \&mime_type_toggled, $mime_type);
+		$Mime_Type_Button{$mime_type} = $button;
+		$mime_type_box->pack_start($button, FALSE, FALSE, 0);
+	}
+	$mime_type_row->set_content($mime_type_box);
 }
 
 $scrwin->set_policy('never', 'automatic');
@@ -389,13 +375,8 @@ $slist->get_selection->set_mode('multiple');
 $slist->get_selection->signal_connect('changed', \&click_list);
 $slist->signal_connect('row-activated', \&dblclk_list);
 set_list_app_items($slist, @apps);
-if(scalar @mime_types == 1)
-{
-	# order of the rows is the order of the default apps (for the ticked ones)
-	$slist->set_reorderable(TRUE);
-	# a drag-and-drop move is an insertion of the new row, then a deletion of the old one
-	$slist->get_model->signal_connect('row-deleted', \&list_rows_reordered);
-}
+# a drag-and-drop move is an insertion of the new row, then a deletion of the old one
+$slist->get_model->signal_connect('row-deleted', \&list_rows_reordered);
 
 $checkbox_column = $slist->get_column($slist_default_app_checkbox_colum_index);
 $system_checkbox_column = $slist->get_column($slist_system_default_app_checkbox_colum_index);
@@ -405,9 +386,9 @@ for my $checkbox_set ([$checkbox_column, 'user'], [$system_checkbox_column, 'sys
 	my ($renderer) = $column->get_cell_renderers;
 	$renderer->signal_connect('toggled', \&toggle_default_app_checkbox, $which);
 	$column->set_cell_data_func($renderer, make_checkbox_cell_data_func($which));
-	# setting default app makes sense for a single MIME type only
-	$column->set_visible(FALSE) if scalar @mime_types > 1;
 }
+# the columns are visible for a single (checked) MIME type only
+apply_list_mode();
 $slist->set_property('has-tooltip', TRUE);
 $slist->signal_connect('query-tooltip', \&list_tooltip);
 
@@ -859,11 +840,12 @@ sub list_tooltip
 
 sub list_rows_reordered
 {
-	return if $list_reorder_pending;
+	return if $list_reorder_pending or $list_refreshing or not defined $default_mime_type;
 	$list_reorder_pending = 1;
 	# let the drag-and-drop finish (insertion of the new row and deletion of the old one)
 	Glib::Idle->add(sub {
 		$list_reorder_pending = 0;
+		return FALSE if not defined $default_mime_type;
 		
 		# the row of the custom application is always the last one
 		my $model = $slist->get_model;
@@ -1239,15 +1221,119 @@ sub set_list_app_items
 	push @$slist_data, [Gtk2::Button->new->render_icon('gtk-add', 'button'), '<big>'."Custom application...".'</big>', FALSE, FALSE, -1];
 }
 
+sub active_mime_types
+{
+	return grep {$Mime_Type_Active{$_}} @mime_types;
+}
+
+sub collect_apps
+{
+	# (re)build the list of the applications (@apps) for the MIME types which are checked at the moment
+	my @active_mime_types = active_mime_types();
+	my @all_default_apps = ();
+	my @all_canonical_apps = ();
+	my @all_other_nonaliased_apps = ();
+	%App_Mime_Types = ();
+	# set for a single MIME type only, which is when the default apps can be edited
+	$default_mime_type = undef;
+	@default_mime_keys = ();
+	%Default_Names = ();
+	%Default_Files = ();
+	
+	for my $mime_type (@active_mime_types)
+	{
+		my $canon_mime_type = mimetype_canon $mime_type;
+		my @canonical_apps = mime_applications_all($mime_type);
+		map {$_->{'mime_type'} = $canon_mime_type if defined $_} @canonical_apps;
+		push @all_canonical_apps, @canonical_apps;
+		
+		my @default_nonaliased_apps = File::MimeInfo::Applications::_default($mime_type);
+		my @other_nonaliased_apps = File::MimeInfo::Applications::_others($mime_type);
+		map {$_->{'mime_type'} = $mime_type if defined $_} @default_nonaliased_apps, @other_nonaliased_apps;
+		push @all_other_nonaliased_apps, @other_nonaliased_apps;
+		
+		my @default_apps = ($canonical_apps[0], @default_nonaliased_apps);
+		if(scalar @active_mime_types == 1)
+		{
+			# the library knows only one default app, but there can be more of them in the preferences
+			$default_mime_type = $canon_mime_type;
+			@default_mime_keys = ($canon_mime_type);
+			push @default_mime_keys, $mime_type if $mime_type ne $canon_mime_type;
+			load_default_apps_config();
+			my %seen_default_name;
+			@default_apps = grep {defined} map {find_desktop_entry($_)} grep {!$seen_default_name{$_}++} (@{$Default_Names{'user'}}, @{$Default_Names{'system'}});
+			map {$_->{'mime_type'} = $canon_mime_type} @default_apps;
+		}
+		map {$_->{'is_default_app'} = 1 if defined $_} @default_apps;
+		push @all_default_apps, @default_apps;
+		
+		map {$App_Mime_Types{$_->get('Exec')}{$mime_type} = 1 if defined $_} @canonical_apps, @default_apps, @default_nonaliased_apps, @other_nonaliased_apps;
+	}
+	
+	%FilterApps_Seen = ();
+	@apps = grep {&filter_apps} @all_default_apps, @all_canonical_apps, @all_other_nonaliased_apps;
+}
+
+sub apply_list_mode
+{
+	# setting and ordering the default apps makes sense for a single MIME type only
+	my $single = defined $default_mime_type ? TRUE : FALSE;
+	# order of the rows is the order of the default apps (for the ticked ones)
+	$slist->set_reorderable($single);
+	$checkbox_column->set_visible($single);
+	$system_checkbox_column->set_visible($single);
+}
+
+sub refresh_app_list
+{
+	collect_apps();
+	# removing the rows is not a drag-and-drop reordering, and nobody is selecting an application meanwhile
+	$list_refreshing = 1;
+	$app_selection_changed_signal_lock = 1;
+	@{$slist->{'data'}} = ();
+	$app_selection_changed_signal_lock = 0;
+	$list_refreshing = 0;
+	set_list_app_items($slist, @apps);
+	apply_list_mode();
+}
+
+sub update_mime_type_buttons
+{
+	# the last checked MIME type can not be unchecked
+	my @active = active_mime_types();
+	for my $mime_type (keys %Mime_Type_Button)
+	{
+		$Mime_Type_Button{$mime_type}->set_sensitive((scalar @active == 1 and $Mime_Type_Active{$mime_type}) ? FALSE : TRUE);
+	}
+}
+
+sub mime_type_toggled
+{
+	my ($button, $mime_type) = @_;
+	return if $mime_type_toggle_lock;
+	$Mime_Type_Active{$mime_type} = $button->get_active ? 1 : 0;
+	if(not scalar active_mime_types())
+	{
+		$Mime_Type_Active{$mime_type} = 1;
+		$mime_type_toggle_lock = 1;
+		$button->set_active(TRUE);
+		$mime_type_toggle_lock = 0;
+		return;
+	}
+	update_mime_type_buttons();
+	refresh_app_list();
+}
+
 sub filter_apps
 {
 	my $a = $_;
 	return 0 if !defined $a;
 	my $x = $a->get('Exec');
-	# keep only apps which can open all the files (intersection, not union)
+	# keep only apps which can open all the files (intersection, not union),
+	# considering the checked MIME types only: a file without any of them does not matter
 	for my $filepath (@Files)
 	{
-		my @file_mime_types = keys %{$file_mime_types{$filepath} || {}};
+		my @file_mime_types = grep {$Mime_Type_Active{$_}} keys %{$file_mime_types{$filepath} || {}};
 		next if not @file_mime_types;
 		return 0 if not grep {$App_Mime_Types{$x}{$_}} @file_mime_types;
 	}
@@ -1293,6 +1379,14 @@ sub init {
 	$self->{scroller}->get_children->set_shadow_type('none');
 	$self->{scroller}->set_size_request(295, -1);
 	$self->{scroller}->get_children->signal_connect('scroll-event' => \&scroll_viewport);
+}
+
+sub set_content
+{
+	# show a widget instead of the label
+	my ($self, $widget) = @_;
+	$self->{container}->remove($self->{scroller});
+	$self->{container}->pack_start($widget, TRUE, TRUE, 0);
 }
 
 sub container { return $_[0]->{container}; }
