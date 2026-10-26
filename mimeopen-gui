@@ -1081,10 +1081,8 @@ sub list_button_press
 		$selection->select_path($path);
 	}
 	$app_menu_file = $app->{'file'};
-	my $has_file = (defined $app_menu_file and length $app_menu_file and -f $app_menu_file) ? TRUE : FALSE;
-	$app_menu_edit->set_sensitive($has_file);
 	# the path as a tooltip, so it is visible which file is going to be opened
-	$app_menu_edit->set_tooltip_text($has_file ? $app_menu_file : '');
+	$app_menu_edit->set_tooltip_text($app_menu_file);
 	$app_menu->popup(undef, undef, undef, undef, $event->button, $event->time);
 	return TRUE;
 }
