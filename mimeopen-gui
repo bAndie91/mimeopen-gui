@@ -15,7 +15,7 @@ use Glib qw/TRUE FALSE/;
 use Gtk2 qw/-init/;
 use Gtk2::SimpleList;
 use utf8;
-eval q{ use Linux::UserXAttr ':all'; };
+eval q{ use Linux::UserXAttr ':all'; 1; } or warn "$0: missing module, degrading x-attribute based MIME type detection: ".$@;
 $xattr_available = $@ ? 0 : 1;
 use Config::Backend::INI;
 use File::XDG;
@@ -333,22 +333,19 @@ if(scalar @mime_types == 1)
 else
 {
 	# a checkbox for each of the MIME types: the list of applications is made for the checked ones
-	$mime_type_row->intro_text("MIME types detected:");
+	$mime_type_row->intro_text("MIME types:");
 	my $mime_type_box = Gtk2::VBox->new(FALSE, 0);
 	for my $mime_type (@mime_types)
 	{
 		my $canon_mime_type = mimetype_canon $mime_type;
 		my $markup = pango_italic($mime_type);
-		$markup .= ' → ' . pango_italic($canon_mime_type) if $canon_mime_type ne $mime_type;
+		$markup .= ' (canonical: ' . pango_italic($canon_mime_type) . ')' if $canon_mime_type ne $mime_type;
 		my $label = Gtk2::Label->new;
 		$label->set_markup($markup);
 		$label->set_alignment(0, 0.5);
-		$label->set_ellipsize('end');
-		$label->set_width_chars(16);
 		my $button = Gtk2::CheckButton->new;
 		$button->add($label);
 		$button->set_active(TRUE);
-		$button->set_tooltip_text($canon_mime_type ne $mime_type ? "$mime_type\n(canonical: $canon_mime_type)" : $mime_type);
 		$button->signal_connect('toggled' => \&mime_type_toggled, $mime_type);
 		$Mime_Type_Button{$mime_type} = $button;
 		$mime_type_box->pack_start($button, FALSE, FALSE, 0);
