@@ -371,6 +371,7 @@ $slist->set_rules_hint(TRUE);
 $slist->get_selection->set_mode('multiple');
 $slist->get_selection->signal_connect('changed', \&click_list);
 $slist->signal_connect('row-activated', \&dblclk_list);
+$slist->signal_connect('button-press-event', \&list_button_press);
 set_list_app_items($slist, @apps);
 # a drag-and-drop move is an insertion of the new row, then a deletion of the old one
 $slist->get_model->signal_connect('row-deleted', \&list_rows_reordered);
@@ -389,6 +390,15 @@ apply_list_mode();
 $slist->set_property('has-tooltip', TRUE);
 $slist->signal_connect('query-tooltip', \&list_tooltip);
 
+
+# context menu of an application row
+$app_menu = Gtk2::Menu->new;
+$app_menu_edit = Gtk2::ImageMenuItem->new_from_stock('gtk-edit', undef);
+$app_menu_edit->signal_connect('activate' => \&edit_app_desktop_file);
+$app_menu->append($app_menu_edit);
+$app_menu->show_all;
+# the .desktop file of the application which the menu was popped up for
+$app_menu_file = undef;
 
 $btn_open->signal_connect('clicked' => \&btnclk_open);
 {
@@ -1050,6 +1060,41 @@ sub dblclk_list
 	# holding Shift keeps the window open, like the second Open button
 	my $state = Gtk2->get_current_event_state;
 	open_selected(($state and ($state & 'shift-mask')) ? 1 : 0);
+}
+
+sub list_button_press
+{
+	my ($widget, $event) = @_;
+	# right click: context menu of the application under the pointer
+	return FALSE if $event->type ne 'button-press' or $event->button != 3;
+	my ($path) = $slist->get_path_at_pos($event->x, $event->y);
+	return FALSE if not defined $path;
+	my ($slist_index) = $path->get_indices;
+	my $app = app_at($slist_index);
+	# no menu for the custom application row
+	return FALSE if not defined $app;
+	# select the row, unless it is part of the selection already
+	my $selection = $slist->get_selection;
+	if(not $selection->path_is_selected($path))
+	{
+		$selection->unselect_all;
+		$selection->select_path($path);
+	}
+	$app_menu_file = $app->{'file'};
+	my $has_file = (defined $app_menu_file and length $app_menu_file and -f $app_menu_file) ? TRUE : FALSE;
+	$app_menu_edit->set_sensitive($has_file);
+	# the path as a tooltip, so it is visible which file is going to be opened
+	$app_menu_edit->set_tooltip_text($has_file ? $app_menu_file : '');
+	$app_menu->popup(undef, undef, undef, undef, $event->button, $event->time);
+	return TRUE;
+}
+
+sub edit_app_desktop_file
+{
+	# open the .desktop file which the application came from, the same way as the Edit button opens the config files;
+	# this window stays open
+	return if not defined $app_menu_file;
+	try_run_apps(1, [[undef, $MIMEOPEN_COMMAND]], $app_menu_file);
 }
 
 sub app_dirs {
