@@ -370,9 +370,21 @@ else
 	$mime_type_row->label_markup(join ", ", map { pango_italic($_) } keys %types_detected);
 }
 
-$scrwin->set_policy('automatic', 'automatic');
+$scrwin->set_policy('never', 'automatic');
 $slist->set_headers_visible(FALSE);
 $slist->set_rules_hint(TRUE);
+{
+	# no horizontal scrolling: the label column takes whatever width is left by the other columns,
+	# and its long lines (eg. Exec) are ellipsized, so the checkboxes on the right are always visible.
+	# The window can still be resized wider to see more of the text.
+	# A fixed-size but expanding column does not make the list request the width of its longest line.
+	my $label_column = $slist->get_column(1);
+	my ($label_renderer) = $label_column->get_cell_renderers;
+	$label_renderer->set(ellipsize => 'end');
+	$label_column->set_sizing('fixed');
+	$label_column->set_fixed_width(120);
+	$label_column->set_expand(TRUE);
+}
 $slist->get_selection->set_mode('multiple');
 $slist->get_selection->signal_connect('changed', \&click_list);
 $slist->signal_connect('row-activated', \&dblclk_list);
