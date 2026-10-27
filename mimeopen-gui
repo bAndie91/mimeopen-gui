@@ -9,6 +9,7 @@ use File::MimeInfo::Applications;
 use File::MimeInfo::Magic qw/magic/;
 use File::Basename qw/basename dirname/;
 use File::BaseDir ();
+use File::Glob qw/bsd_glob/;
 use File::DesktopEntry;
 use File::Spec;
 use Glib qw/TRUE FALSE/;
@@ -1165,6 +1166,92 @@ sub icondir2size
 }
 
 
+sub find_icon_file
+{
+	# find the file of an icon, given the value of the Icon= key of a .desktop file
+	my ($iconname, $pref_size) = @_;
+	
+	# absolute path
+	return $iconname if $iconname =~ /^\//;
+	
+	# the name may carry a file name extension already (Icon=foo.png), but may also just contain dots (Icon=org.gnome.gedit)
+	my $has_ext = ($iconname =~ /\.(?:png|xpm|svg|svgz)$/i);
+	my @names = $has_ext ? ($iconname) : map { "$iconname.$_" } 'png', 'xpm', 'svg', 'svgz';
+	# keep the original lookup behavior of names with dots: try them literally as well
+	push @names, $iconname if not $has_ext and $iconname =~ /\./;
+	
+	# icon theme base directories
+	my @bases = ();
+	push @bases, File::Spec->catdir($ENV{'HOME'}, '.icons') if defined $ENV{'HOME'};
+	push @bases, File::BaseDir::data_dirs('icons');
+	push @bases, '/usr/share/icons';
+	my %seen;
+	@bases = grep { -d $_ and not $seen{$_}++ } @bases;
+	
+	# themes: the traditional ones first, then the current one, then all the others which are installed
+	my @themes = ('hicolor', 'locolor', 'gnome');
+	my $current_theme = eval { Gtk2::Settings->get_default->get('gtk-icon-theme-name') };
+	unshift @themes, $current_theme if defined $current_theme and length $current_theme;
+	%seen = ();
+	@themes = grep { not $seen{$_}++ } @themes;
+	my %known_themes = %seen;
+	my @other_themes;
+	for my $base (@bases)
+	{
+		for my $t (bsd_glob(File::Spec->catfile($base, '*')))
+		{
+			next if not -d $t;
+			my $tname = basename($t);
+			next if $known_themes{$tname}++;
+			push @other_themes, $tname;
+		}
+	}
+	
+	my @dirs;
+	for my $theme (@themes, @other_themes)
+	{
+		for my $base (@bases)
+		{
+			my $d = File::Spec->catdir($base, $theme);
+			next if not -d $d;
+			my @small;
+			# "NxN" (and "NxN@2x") size directories, with the category (apps, actions, ...) subdirectories in them, and also the other way around (apps/48)
+			for my $e (sort {icondir2size($a) <=> icondir2size($b)} grep { defined icondir2size($_) } bsd_glob("$d/*x*/*"))
+			{
+				if(icondir2size($e) < $pref_size)
+				{
+					unshift @small, $e;
+				}
+				else
+				{
+					push @dirs, $e;
+				}
+			}
+			push @dirs, bsd_glob("$d/scalable/*");
+			push @dirs, @small;
+			push @dirs, grep { -d $_ } (bsd_glob("$d/*/$pref_size"), bsd_glob("$d/*/scalable"));
+		}
+	}
+	push @dirs, '/usr/share/pixmaps', File::BaseDir::data_dirs('pixmaps');
+	%seen = ();
+	@dirs = grep { not $seen{$_}++ } @dirs;
+	
+	for my $icondir (@dirs)
+	{
+		for my $name (@names)
+		{
+			my $path = File::Spec->catfile($icondir, $name);
+			return $path if -f $path;
+		}
+	}
+	
+	# let the toolkit find it: it knows the theme inheritance, the icon theme index files and so on
+	my $info = eval { Gtk2::IconTheme->get_default->lookup_icon($iconname, $pref_size, []) };
+	return $info->get_filename if $info and defined $info->get_filename;
+	
+	return undef;
+}
+
 sub set_list_app_items
 {
 	my ($slist, @apps) = @_;
@@ -1181,63 +1268,7 @@ sub set_list_app_items
 		my $appname = app_property($app, 'Name');
 		if($iconname)
 		{
-			my $iconpath;
-			if($iconname =~ /^\//)
-			{
-				$iconpath = $iconname;
-			}
-			else
-			{
-				my @dirs;
-				for my $c ('hicolor', 'locolor', 'gnome')
-				{
-					my $d = "/usr/share/icons/${c}";
-					my @small;
-					for my $e (sort {icondir2size($a) <=> icondir2size($b)} glob "$d/*x*/*")
-					{
-						if(icondir2size($e) < $pref_size)
-						{
-							unshift @small, $e;
-						}
-						else
-						{
-							push @dirs, $e;
-						}
-					}
-					push @dirs, "$d/scalable/*";
-					for my $e (@small)
-					{
-						push @dirs, $e;
-					}
-				}
-				push @dirs, '/usr/share/pixmaps';
-				
-				FINDICON:
-				for my $icondir (@dirs)
-				{
-					my $iconpath_test;
-					for my $iconext ('png', 'xpm', 'svg')
-					{
-						if($iconname =~ /\./)
-						{
-							$iconpath_test = $icondir . '/'. $iconname;
-						}
-						else
-						{
-							$iconpath_test = $icondir . '/'. $iconname . '.' . $iconext;
-						}
-						if(-e $iconpath_test)
-						{
-							$iconpath = $iconpath_test;
-							last FINDICON;
-						}
-						elsif($iconname =~ /\./)
-						{
-							next FINDICON;
-						}
-					}
-				}
-			}
+			my $iconpath = find_icon_file($iconname, $pref_size);
 			if(defined $iconpath)
 			{
 				eval {
