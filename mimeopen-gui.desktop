@@ -5,4 +5,4 @@ Exec=mimeopen-gui %f
 Type=Application
 Categories=GTK;Application;Utility;
 Name=MIME Application Chooser
-MimeType=inode/*;application/*;text/*;video/*;image/*;audio/*;message/*;multipart/*;model/*;x-content/*;
+MimeType=inode/*;application/*;text/*;video/*;image/*;audio/*;message/*;multipart/*;model/*;x-content/*;x-scheme-handler/*;
